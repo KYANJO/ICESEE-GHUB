@@ -1,0 +1,11 @@
+#!/bin/sh
+
+# Reference: https://theghub.org/kb/development/invoke-scripts-for-jupyter-notebooks
+/usr/bin/invoke_app "$@" -t ghubex2 \
+                         -u anaconda-7 \
+                         -u wrwroxy-0.2 \
+                         -r none \
+                         -w headless \
+                         -e PYTHONPATH=@tool \
+                         -C @tool/bin/showbook.sh \
+                         -c "wrwroxy --listenHost 0.0.0.0 --listenPort 8000 --forwardHost 127.0.0.1 --forwardPort 8080 --loglevel WARNING"
