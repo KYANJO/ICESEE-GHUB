@@ -9,5 +9,5 @@ parts:
 - caption: Notebooks
   numbered: false
   chapters:
-  - file: template_jupyter_notebooks/notebook1.ipynb
-  - file: template_jupyter_notebooks/notebook2.ipynb
+  - file: icesee_jupyter_notebooks/notebook1.ipynb
+  - file: icesee_jupyter_notebooks/notebook2.ipynb

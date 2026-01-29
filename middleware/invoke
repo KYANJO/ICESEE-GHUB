@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # Reference: https://theghub.org/kb/development/invoke-scripts-for-jupyter-notebooks
-/usr/bin/invoke_app "$@" -t ghubex2 \
+/usr/bin/invoke_app "$@" -t ICESEE-ONLINE \
                          -u anaconda-7 \
                          -u wrwroxy-0.2 \
                          -r none \
