@@ -1,26 +1,100 @@
-title          : ICESEE on GHUB
-author         : Brian KYANJO
-copyright      : "2026"
-logo           : icesee_logo.png
-only_build_toc_files: true
+# author : Brian KYANJO
+# date  : January 2026
 
-html:
-  use_edit_page_button: false
-  use_repository_button: true
-  use_issues_button: true
-  use_download_button: true
-  home_page_in_navbar: false
+# Book settings --------------------  
+title                : ICESEE on GHUB
+author               : Brian KYANJO
+copyright            : "2026"
+logo                 : icesee_logo.png
+exclude_patterns     : [_build, Thumbs.db, .DS_Store, "**.ipynb_checkpoints"]
+only_build_toc_files : true
 
-# bibtex_bibfiles:
-#  - refs.bib
-
-# bibtex_reference_style: author_year
-
-repository:
-  url: https://github.com/ICESEE-project/ICESEE
-  branch: master
-  
-execute:
+# execution settings ------------------
+execute: # Options for to control execution and caching
   execute_notebooks : 'force'
   timeout           : 30
   allow_errors      : false
+
+  stdeerr_output    : show
+
+# Parse and render settings ------------------
+parse:
+  myst_enable_extensions:  # default extensions to enable in the myst parser. See https://myst-parser.readthedocs.io/en/latest/using/syntax-optional.html
+      # - amsmath
+      - colon_fence
+      # - deflist
+      - dollarmath
+      # - html_admonition
+      # - html_image
+      - linkify
+      # - replacements
+      # - smartquotes
+      - substitution
+      - tasklist
+  myst_url_schemes: [mailto, http, https] # URI schemes that will be recognised as external URLs in Markdown links
+  myst_dmath_double_inline: true  # Allow display math ($$) within an inline context
+
+# HTML output settings ------------------
+html:
+  use_edit_page_button   : false
+  use_repository_button  : true
+  use_issues_button      : true
+  use_download_button    : true
+  home_page_in_navbar.   : true
+  use_multitoc_numbering    : true
+  analytics:
+    plausible_analytics_domain: ""
+    plausible_analytics_url: "https://plausible.io/js/script.js"
+    google_analytics_id       : ""  # A GA id that can be used to track book views.
+  
+  extra_navbar: |
+    <a href="https://github.com/ICESEE-project/ICESEE/wiki">Wiki</a> |
+    <a href="https://github.com/ICESEE-project/ICESEE">GitHub</a>
+
+  theme:
+    name: sphinx_book_theme
+    options:
+      collapse_navigation: true
+      navigation_with_keys: false
+      show_navbar_depth: 1
+
+  comments:
+    hypothesis              : false
+    utterances              : false
+  announcement              : "" # A banner announcement at the top of the site.
+
+  extra_css:
+    - _static/icesee.css
+  extra_js:
+    - _static/icesee-sidebar.js
+
+# LaTeX-specific settings ------------------
+latex:
+  latex_engine              : pdflatex  # one of 'pdflatex', 'xelatex' (recommended for unicode), 'luatex', 'platex', 'uplatex'
+  use_jupyterbook_latex     : true # use sphinx-jupyterbook-latex for pdf builds as default
+
+
+# Launch button settings ------------------
+launch_buttons:
+  notebook_interface        : classic  # The interface interactive links will activate ["classic", "jupyterlab"]
+  binderhub_url             : ""  # The URL of the BinderHub (e.g., https://mybinder.org)
+  jupyterhub_url            : ""  # The URL of the JupyterHub (e.g., https://datahub.berkeley.edu)
+  thebe                     : false  # Add a thebe button to pages (requires the repository to run on Binder)
+  colab_url                 : "" # The URL of Google Colab (https://colab.research.google.com)
+  deepnote_url              : "" # The URL of Deepnote (https://deepnote.com)
+
+repository:
+  url                       : https://github.com/ICESEE-project/ICESEE # The URL to your book's repository
+  path_to_book              : ""  # A path to your book's folder, relative to the repository root.
+  branch                    : master  # Which branch of the repository should be used when creating links
+bibtex_bibfiles:
+  - references.bib
+
+sphinx:
+  extra_extensions:   # A list of extra extensions to load by Sphinx (added to those already used by JB).
+    - sphinx_design
+  local_extensions          :   # A list of local extensions to load by sphinx specified by "name: path" items
+  recursive_update          : false # A boolean indicating whether to overwrite the Sphinx config (true) or recursively update (false)
+  config:
+    bibtex_reference_style: author_year
+
