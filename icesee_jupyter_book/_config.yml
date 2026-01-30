@@ -1,13 +1,14 @@
 title          : ICESEE on GHUB
-author         : theghub.org
+author         : Brian KYANJO
 copyright      : "2026"
-logo           : logo-square.png
+logo           : icesee_logo.png
 only_build_toc_files: true
 
 html:
   use_edit_page_button: false
   use_repository_button: true
-  use_issues_button: false
+  use_issues_button: true
+  use_download_button: true
   home_page_in_navbar: false
 
 # bibtex_bibfiles:
@@ -16,7 +17,7 @@ html:
 # bibtex_reference_style: author_year
 
 repository:
-  url: https://github.com/GhubGateway/Ghub_Jupyter_Book_Template
+  url: https://github.com/ICESEE-project/ICESEE
   branch: master
   
 execute:
