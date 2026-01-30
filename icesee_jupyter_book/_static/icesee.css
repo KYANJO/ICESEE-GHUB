@@ -1,0 +1,29 @@
+/* _static/icesee.css */
+/* Make section captions clickable and add a caret indicator */
+
+nav.bd-links p.caption.icesee-caption {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* Default expanded caret */
+nav.bd-links p.caption.icesee-caption::before {
+  content: "▾";
+  font-size: 0.9em;
+  line-height: 1;
+  transform: translateY(-1px);
+  opacity: 0.8;
+}
+
+/* Hide children when collapsed */
+nav.bd-links ul.icesee-collapsed {
+  display: none;
+}
+
+/* Collapsed caret */
+nav.bd-links p.caption.icesee-caption[aria-expanded="false"]::before {
+  content: "▸";
+}
