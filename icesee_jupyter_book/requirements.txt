@@ -1,0 +1,10 @@
+# Notebook execution compatibility (fixes "id was unexpected")
+nbformat>=5.9
+nbclient>=0.8
+jupyter-client>=8
+ipykernel>=6.29
+traitlets>=5.14
+
+# Your GUI pages
+ipywidgets>=8.1
+papermill>=2.5

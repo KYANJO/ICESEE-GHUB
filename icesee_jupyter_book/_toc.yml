@@ -2,24 +2,33 @@ format: jb-book
 root: index
 
 parts:
-- caption: Getting Started
-  numbered: false
-  chapters:
-  - file: intro
-  - file: quickstart
-  - file: icesee_workflow
+  - caption: Getting Started
+    numbered: false
+    chapters:
+      - file: intro
+      - file: quickstart
+      - file: icesee_workflow
 
-- caption: Documentation
-  numbered: false
-  chapters:
-  - file: user_manual
-  - file: running_with_containers
-  - file: icesee_hpc_coupling
+  - caption: ICESEE-OnLINE
+    numbered: false
+    chapters:
+      - file: icesee_jupyter_notebooks/run_center
+      - file: icesee_jupyter_notebooks/latest_run
+      # - file: icesee_jupyter_notebooks/flowline_gui
+      # - file: icesee_jupyter_notebooks/icepack_gui
+      # - file: icesee_jupyter_notebooks/issm_gui
 
-- caption: Tutorials
-  numbered: false
-  chapters:
-  - file: icesee_jupyter_notebooks/run_lorenz96_da.ipynb
-  # - file: icesee_jupyter_notebooks/run_flowline_da.ipynb
-  # - file: icesee_jupyter_notebooks/run_icepack_da.ipynb
-  # - file: icesee_jupyter_notebooks/run_issm_da.ipynb
+  - caption: Tutorials
+    numbered: false
+    chapters:
+      - file: icesee_jupyter_notebooks/run_lorenz96_da.ipynb
+      # - file: icesee_jupyter_notebooks/run_flowline_da.ipynb
+      # - file: icesee_jupyter_notebooks/run_icepack_da.ipynb
+      # - file: icesee_jupyter_notebooks/run_issm_da.ipynb
+
+  - caption: Deployment Notes
+    numbered: false
+    chapters:
+      - file: running_with_containers
+      - file: icesee_hpc_coupling
+      - file: user_manual
