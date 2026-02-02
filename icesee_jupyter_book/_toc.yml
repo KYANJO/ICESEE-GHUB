@@ -20,6 +20,6 @@ parts:
   numbered: false
   chapters:
   - file: icesee_jupyter_notebooks/run_lorenz96_da.ipynb
-  - file: icesee_jupyter_notebooks/run_flowline_da.ipynb
-  - file: icesee_jupyter_notebooks/run_icepack_da.ipynb
-  - file: icesee_jupyter_notebooks/run_issm_da.ipynb
+  # - file: icesee_jupyter_notebooks/run_flowline_da.ipynb
+  # - file: icesee_jupyter_notebooks/run_icepack_da.ipynb
+  # - file: icesee_jupyter_notebooks/run_issm_da.ipynb

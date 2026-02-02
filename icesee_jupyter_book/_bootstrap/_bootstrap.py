@@ -21,6 +21,10 @@ import sys
 import os
 from pathlib import Path
 
+book_root = Path(__file__).resolve().parents[1]  # .../icesee_jupyter_book
+if str(book_root) not in sys.path:
+    sys.path.insert(0, str(book_root))
+os.environ["PYTHONPATH"] = f"{book_root}:{os.environ.get('PYTHONPATH','')}"
 
 def enable_icesee(verbose: bool = True) -> Path:
     """
