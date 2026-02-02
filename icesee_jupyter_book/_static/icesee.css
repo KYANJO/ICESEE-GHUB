@@ -108,3 +108,22 @@ nav.bd-links li.current > a.reference.internal {
 nav.bd-links a.reference.internal:hover {
   background: rgba(2, 6, 23, 0.04);
 }
+
+/* Make Home look like a landing entry */
+nav.bd-links li.current > a.reference.internal {
+  background: rgba(37, 99, 235, 0.10) !important;
+  border-radius: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  font-weight: 650;
+}
+
+nav.bd-links p.caption.icesee-caption {
+  background: rgba(2, 6, 23, 0.03);
+  border: 1px solid rgba(2, 6, 23, 0.06);
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.5rem;
+}
+
+nav.bd-links p.caption.icesee-caption:hover {
+  background: rgba(2, 6, 23, 0.06);
+}

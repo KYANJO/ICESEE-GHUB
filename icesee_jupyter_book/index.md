@@ -1,4 +1,5 @@
 # Home
+
 ## ICESEE: Ice Sheet State Estimator
 
 Welcome to the **ICESEE GHUB Tool** — an interactive **Jupyter Book** interface for exploring and running the *Ice Sheet State Estimator (ICESEE)* framework.

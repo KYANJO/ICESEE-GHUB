@@ -87,5 +87,3 @@ Some ICESEE components run with standard scientific Python packages, while other
 
 - **Runs directly in GHUB** (Lorenz-96 DA demo)
 - **Requires external installations** (ISSM / Icepack workflows)
-
----
