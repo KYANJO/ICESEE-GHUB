@@ -48,8 +48,13 @@ html:
     google_analytics_id       : ""  # A GA id that can be used to track book views.
   
   extra_navbar: |
-    <a href="https://github.com/ICESEE-project/ICESEE/wiki">Wiki</a> |
-    <a href="https://github.com/ICESEE-project/ICESEE">GitHub</a>
+    <a class="navbar-brand" href="./index.html">ICESEE-OnLINE</a>
+    <span style="margin-left:10px"></span>
+    <a href="./icesee_jupyter_notebooks/run_center.html">Run Center</a>
+    <span style="margin:0 8px; opacity:.4">|</span>
+    <a href="./icesee_jupyter_notebooks/run_lorenz96_da.html">Tutorials</a>
+    <span style="margin:0 8px; opacity:.4">|</span>
+    <a href="https://github.com/ICESEE-project/ICESEE/wiki">Wiki</a>
 
   theme:
     name: sphinx_book_theme
@@ -65,6 +70,7 @@ html:
 
   extra_css:
     - _static/icesee.css
+    - _static/icesee-gui.css
   extra_js:
     - _static/icesee-sidebar.js
 
@@ -91,10 +97,12 @@ bibtex_bibfiles:
   - references.bib
 
 sphinx:
+  config:
+    bibtex_reference_style: author_year
+    nb_execution_show_tb: False
+    nb_render_plugin: default
+ 
   extra_extensions:   # A list of extra extensions to load by Sphinx (added to those already used by JB).
     - sphinx_design
   local_extensions          :   # A list of local extensions to load by sphinx specified by "name: path" items
   recursive_update          : false # A boolean indicating whether to overwrite the Sphinx config (true) or recursively update (false)
-  config:
-    bibtex_reference_style: author_year
-
