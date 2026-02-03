@@ -1,0 +1,122 @@
+#!/bin/bash -l
+# Create the icesee1 environment and associated kernel.
+# Follows naming convention in /apps/share64/debian10/anaconda.
+# For apps build, copy this script to /apps/share64/debian10/anaconda and run there.
+# Make sure the kernel is NOT selected in JupyterLab/Notebook first (nfs device busy risk).
+
+# Usage:
+# ./go.icesee1
+# or:
+# ./go.icesee1 2>&1 | tee go_icesee1_log.txt | less --RAW-CONTROL-CHARS
+
+version_number="1"
+
+. /etc/environ.sh
+conda_choice=anaconda-7
+echo "conda_choice: ${conda_choice}"
+use -e -r ${conda_choice}
+echo "which conda: $(which conda)"
+echo "which jupyter: $(which jupyter)"
+echo "which python: $(which python)"
+
+if [[ "$PWD" == "/apps/share64/debian10/anaconda" ]]; then
+    apps="true"
+    conda_root=/apps/share64/debian10/anaconda/${conda_choice}
+    kernel_root=/apps/share64/debian10/anaconda/${conda_choice}
+    environment="icesee${version_number}"
+else
+    apps="false"
+    conda_root=/data/groups/ghub/tools/icesee
+    kernel_root=${HOME}/.local
+    environment="icesee${version_number}-dev"
+fi
+
+echo "apps: ${apps}"
+echo "conda_root: ${conda_root}"
+echo "kernel_root: ${kernel_root}"
+echo "environment: ${environment}"
+echo "environment directory: ${conda_root}/envs/${environment}"
+sleep 2
+
+if [[ "${apps}" != "true" ]]; then
+    conda config --add envs_dirs ${conda_root}/envs
+    conda config --add pkgs_dirs ${conda_root}/pkgs
+fi
+
+conda_list=./icesee${version_number}_conda_list.txt
+conda_env_yml=./icesee${version_number}_environment.yml
+
+start1=$(date +%s)
+echo "Removing env ${environment}..."
+conda remove --name ${environment} --all -y || true
+end=$(date +%s)
+echo "Env ${environment} removed. Elapsed time: $((($end-$start1)/60)) minutes"
+
+start2=$(date +%s)
+echo "Creating env ${environment} from ${conda_env_yml}..."
+conda env create --name ${environment} -f ${conda_env_yml}
+end=$(date +%s)
+echo "Env ${environment} created. Elapsed time: $((($end-$start2)/60)) minutes"
+
+echo "Activating env ${environment}..."
+source activate ${environment}
+echo "Env ${environment} activated"
+echo "which jupyter: $(which jupyter)"
+echo "jupyter --version: $(jupyter --version)"
+echo "which python: $(which python)"
+
+echo "Installing ICESEE into env ${environment}..."
+
+# -------------------------------------------------------------------
+# Point this to a stable ICESEE checkout:
+# - local testing: your local ICESEE repo path
+# - apps install: apps group uses a stable checkout (tag/release)
+# -------------------------------------------------------------------
+ICESEE_REPO_DEFAULT="${HOME}/da_project/ICESEE"
+ICESEE_REPO="${ICESEE_REPO:-${ICESEE_REPO_DEFAULT}}"
+echo "ICESEE_REPO: ${ICESEE_REPO}"
+
+if [[ ! -f "${ICESEE_REPO}/pyproject.toml" ]]; then
+  echo "ERROR: pyproject.toml not found in ICESEE_REPO=${ICESEE_REPO}"
+  echo "Set ICESEE_REPO to your ICESEE source checkout path."
+  exit 2
+fi
+
+python -m pip install -U pip setuptools wheel
+
+# Install with viz extras for GUI + read_results workflow.
+# Add mpi extras only if GHUB MPI stack supports mpi4py.
+if [[ "${apps}" == "true" ]]; then
+  python -m pip install "${ICESEE_REPO}[viz]"
+else
+  python -m pip install -e "${ICESEE_REPO}[viz]"
+fi
+
+# Optional: MPI extras (uncomment when ready on GHUB)
+# python -m pip install "${ICESEE_REPO}[mpi]" || true
+
+echo "Sanity check: import ICESEE"
+python -c "import ICESEE; print('ICESEE imported from:', ICESEE.__file__)"
+
+echo "Installing the kernel for env ${environment}..."
+jupyter kernelspec uninstall ${environment} -y || true
+python -m ipykernel install --sys-prefix --name ${environment} --display-name "Python3 (${environment})"
+python -m ipykernel install --prefix ${kernel_root} --name ${environment} --display-name "Python3 (${environment})"
+
+rm -rf ${conda_list}
+conda list > ${conda_list}
+
+echo "Deactivating env ${environment}..."
+conda deactivate
+echo "Env ${environment} deactivated"
+
+echo "jupyter kernelspec list:"
+jupyter kernelspec list
+
+if [[ "${apps}" != "true" ]]; then
+    conda config --remove envs_dirs ${conda_root}/envs
+    conda config --remove pkgs_dirs ${conda_root}/pkgs
+fi
+
+end=$(date +%s)
+echo "Done. Total elapsed time: $((($end-$start1)/60)) minutes"
