@@ -18,11 +18,22 @@ version_number="1"
 
 # -e: Environment only.  Act on the current shell.  Do not preserve.
 # -r: Replace an already selected version without prompting.
-. /etc/environ.sh
-conda_choice=anaconda-7
-echo "conda_choice: "${conda_choice}
-use -e -r ${conda_choice}
-echo "which conda: "$(which conda)
+# --- Select conda (GHUB vs non-GHUB) ---
+if [[ -f /etc/environ.sh ]]; then
+  . /etc/environ.sh
+  conda_choice=anaconda-7
+  echo "conda_choice: ${conda_choice}"
+  use -e -r ${conda_choice}
+else
+  echo "/etc/environ.sh not found (non-GHUB). Using current conda from PATH."
+fi
+
+command -v conda >/dev/null 2>&1 || { echo "ERROR: conda not found in PATH"; exit 2; }
+echo "which conda: $(which conda)"
+
+# Modern activation support
+eval "$(conda shell.bash hook)"
+
 echo "which jupyter: "$(which jupyter)
 echo "which python: "$(which python)
 
@@ -33,10 +44,18 @@ if [[ "$PWD" == "/apps/share64/debian10/anaconda" ]]; then
     environment=icesee${version_number}
 else
     apps="false"
-    conda_root=/data/groups/ghub/tools/icesee
+    if [[ -f /etc/environ.sh ]]; then
+        conda_root=/data/groups/ghub/tools/icesee
+    else
+        # Non-GHUB: must be writable
+        conda_root="${ICESEE_CONDA_ROOT:-${HOME}/.icesee_conda}"
+    fi
     kernel_root=${HOME}/.local
     environment=icesee${version_number}-dev
 fi
+
+mkdir -p "${conda_root}/envs" "${conda_root}/pkgs"
+
 echo "apps: "${apps}
 echo "conda_root: "${conda_root}
 echo "kernel_root: "${kernel_root}
@@ -72,7 +91,10 @@ echo "Env ${environment} created. Elapsed time: $((($end-$start2)/60)) minutes"
 echo "Activating env "${environment}"..."
 # Observation, conda activate returns Your shell has not been properly configured to use conda activate and
 # conda init bash returns No action taken.
-source activate ${environment}
+# source activate ${environment}
+eval "$(conda shell.bash hook)"
+conda activate ${environment}
+
 echo "Env ${environment} activated"
 echo "which jupyter: "$(which jupyter)
 echo "jupyter --version: "$(jupyter --version)
@@ -81,83 +103,87 @@ echo "which python: "$(which python)
 echo "Installing ICESEE into env "${environment}"..."
 
 # -------------------------------------------------------------------
-# Locate ICESEE checkout for pip install.
-# Local behavior (apps=false): auto-clone ICESEE-GHUB if not found.
-# Apps behavior (apps=true): never auto-clone; expect a stable path via ICESEE_REPO.
+# Robust ICESEE source discovery.
+#
+# Assumptions:
+# - On GHUB, ICESEE-GHUB repo is cloned somewhere and ICESEE is submodule at external/ICESEE.
+# - go.icesee1 may be located anywhere.
+#
+# Priority:
+#  1) ICESEE_REPO env var (explicit override)
+#  2) Search upwards from PWD for a repo root containing external/ICESEE/pyproject.toml
+#  3) Search upwards from script location for same
+#  4) Local only (apps=false and not GHUB): auto-clone ICESEE-GHUB and use submodule path
 # -------------------------------------------------------------------
 
 ICESEE_GHUB_URL="${ICESEE_GHUB_URL:-https://github.com/ICESEE-project/ICESEE-GHUB.git}"
 
-# Where to clone for local builds if missing:
-# Keep it under the tool area by default (so it's predictable on GHUB-like machines).
-ICESEE_GHUB_CLONE_DIR_DEFAULT="${conda_root}/src/ICESEE-GHUB"
+# Where to clone on local machines if we must:
+# Use HOME by default (always writable). Can override via ICESEE_GHUB_CLONE_DIR.
+ICESEE_GHUB_CLONE_DIR_DEFAULT="${HOME}/.icesee_src/ICESEE-GHUB"
 ICESEE_GHUB_CLONE_DIR="${ICESEE_GHUB_CLONE_DIR:-${ICESEE_GHUB_CLONE_DIR_DEFAULT}}"
 
-find_icesee_repo() {
-  # 1) explicit override
-  if [[ -n "${ICESEE_REPO:-}" && -f "${ICESEE_REPO}/pyproject.toml" ]]; then
-    echo "${ICESEE_REPO}"
-    return 0
-  fi
+is_ghub_node="false"
+if [[ -f /etc/environ.sh ]]; then
+  is_ghub_node="true"
+fi
 
-  # 2) detect from script location (walk upward looking for external/ICESEE)
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  d="${script_dir}"
+find_icesee_repo_from() {
+  # $1 = start directory
+  d="$1"
   while [[ "${d}" != "/" ]]; do
-    if [[ -d "${d}/external/ICESEE" && -f "${d}/external/ICESEE/pyproject.toml" ]]; then
+    if [[ -f "${d}/external/ICESEE/pyproject.toml" ]]; then
       echo "${d}/external/ICESEE"
       return 0
     fi
     d="$(dirname "${d}")"
   done
-
-  # 3) detect from current working directory
-  d="${PWD}"
-  while [[ "${d}" != "/" ]]; do
-    if [[ -d "${d}/external/ICESEE" && -f "${d}/external/ICESEE/pyproject.toml" ]]; then
-      echo "${d}/external/ICESEE"
-      return 0
-    fi
-    d="$(dirname "${d}")"
-  done
-
-  # 4) if we already cloned into our default local clone dir
-  if [[ -d "${ICESEE_GHUB_CLONE_DIR}/external/ICESEE" && -f "${ICESEE_GHUB_CLONE_DIR}/external/ICESEE/pyproject.toml" ]]; then
-    echo "${ICESEE_GHUB_CLONE_DIR}/external/ICESEE"
-    return 0
-  fi
-
   return 1
 }
 
 clone_icesee_ghub_local() {
-  echo "ICESEE not found. Local mode: cloning ICESEE-GHUB..."
-  echo "  repo:  ${ICESEE_GHUB_URL}"
-  echo "  into:  ${ICESEE_GHUB_CLONE_DIR}"
+  # Logs to stderr; ONLY final path to stdout.
+  echo "ICESEE not found. Local mode: cloning ICESEE-GHUB..." >&2
+  echo "  repo:  ${ICESEE_GHUB_URL}" >&2
+  echo "  into:  ${ICESEE_GHUB_CLONE_DIR}" >&2
 
   mkdir -p "$(dirname "${ICESEE_GHUB_CLONE_DIR}")"
   rm -rf "${ICESEE_GHUB_CLONE_DIR}"
 
-  # Clone with submodules so external/ICESEE is present
-  git clone --recurse-submodules "${ICESEE_GHUB_URL}" "${ICESEE_GHUB_CLONE_DIR}"
-
-  # Safety: ensure submodule is initialized (some git setups still need this)
-  ( cd "${ICESEE_GHUB_CLONE_DIR}" && git submodule update --init --recursive )
+  git clone --recurse-submodules "${ICESEE_GHUB_URL}" "${ICESEE_GHUB_CLONE_DIR}" >&2
+  ( cd "${ICESEE_GHUB_CLONE_DIR}" && git submodule update --init --recursive ) >&2
 
   if [[ -f "${ICESEE_GHUB_CLONE_DIR}/external/ICESEE/pyproject.toml" ]]; then
-    echo "Clone OK."
     echo "${ICESEE_GHUB_CLONE_DIR}/external/ICESEE"
     return 0
   fi
 
-  echo "ERROR: Clone completed but external/ICESEE/pyproject.toml not found."
+  echo "ERROR: Clone completed but external/ICESEE/pyproject.toml not found." >&2
   return 1
 }
 
-ICESEE_REPO="$(find_icesee_repo || true)"
+# 1) explicit override
+ICESEE_REPO="${ICESEE_REPO:-}"
+if [[ -n "${ICESEE_REPO}" && -f "${ICESEE_REPO}/pyproject.toml" ]]; then
+  :
+else
+  ICESEE_REPO=""
+fi
 
+# 2) search upward from current working directory
 if [[ -z "${ICESEE_REPO}" ]]; then
-  if [[ "${apps}" != "true" ]]; then
+  ICESEE_REPO="$(find_icesee_repo_from "${PWD}" || true)"
+fi
+
+# 3) search upward from script location
+if [[ -z "${ICESEE_REPO}" ]]; then
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  ICESEE_REPO="$(find_icesee_repo_from "${script_dir}" || true)"
+fi
+
+# 4) local auto-clone only (NOT on GHUB nodes and NOT for apps installs)
+if [[ -z "${ICESEE_REPO}" ]]; then
+  if [[ "${apps}" != "true" && "${is_ghub_node}" != "true" ]]; then
     ICESEE_REPO="$(clone_icesee_ghub_local || true)"
   fi
 fi
@@ -166,14 +192,18 @@ echo "ICESEE_REPO: ${ICESEE_REPO}"
 
 if [[ -z "${ICESEE_REPO}" || ! -f "${ICESEE_REPO}/pyproject.toml" ]]; then
   echo "ERROR: Could not locate ICESEE source checkout."
-  echo "Expected ICESEE at: ICESEE-GHUB/external/ICESEE (submodule)."
+  echo "Expected to find ICESEE within an ICESEE-GHUB clone at: <repo_root>/external/ICESEE"
   echo ""
   echo "Fix options:"
-  echo "  1) Local: ensure git is available and network access works, then rerun."
-  echo "  2) Or set ICESEE_REPO explicitly:"
+  echo "  1) Run go.icesee1 from somewhere inside the ICESEE-GHUB repo tree, OR"
+  echo "  2) Set ICESEE_REPO explicitly:"
   echo "       ICESEE_REPO=/path/to/ICESEE ./go.icesee1"
+  if [[ "${apps}" != "true" && "${is_ghub_node}" != "true" ]]; then
+    echo "  3) Ensure git + network access are available for auto-clone."
+  fi
   exit 2
 fi
+
 
 if [[ ! -f "${ICESEE_REPO}/pyproject.toml" ]]; then
   echo "ERROR: pyproject.toml not found in ICESEE_REPO=${ICESEE_REPO}"

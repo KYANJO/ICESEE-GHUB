@@ -24,24 +24,50 @@ mpi_impl="${MPI_IMPL:-mpich}"
 
 # -e: Environment only.  Act on the current shell.  Do not preserve.
 # -r: Replace an already selected version without prompting.
-. /etc/environ.sh
-conda_choice=anaconda-7
-echo "conda_choice: "${conda_choice}
-use -e -r ${conda_choice}
-echo "which conda: "$(which conda)
+# --- Select conda (GHUB vs non-GHUB) ---
+if [[ -f /etc/environ.sh ]]; then
+  . /etc/environ.sh
+  conda_choice=anaconda-7
+  echo "conda_choice: ${conda_choice}"
+  use -e -r ${conda_choice}
+else
+  echo "/etc/environ.sh not found (non-GHUB). Using current conda from PATH."
+fi
+
+command -v conda >/dev/null 2>&1 || { echo "ERROR: conda not found in PATH"; exit 2; }
+echo "which conda: $(which conda)"
+
+# Modern activation support
+eval "$(conda shell.bash hook)"
+
+
 echo "which jupyter: "$(which jupyter)
 echo "which python: "$(which python)
 
 environment=icesee${version_number}-dev
 echo "environment: "${environment}
 
-conda_root=/data/groups/ghub/tools/icesee
+# conda_root=/data/groups/ghub/tools/icesee/
+if [[ -f /etc/environ.sh ]]; then
+  conda_root=/data/groups/ghub/tools/icesee
+else
+  # Non-GHUB machine: must be writable
+  conda_root="${ICESEE_CONDA_ROOT:-${HOME}/.icesee_conda}"
+fi
+echo "conda_root: ${conda_root}"
+mkdir -p "${conda_root}/envs" "${conda_root}/pkgs"
+
 echo "conda_root: "${conda_root}
 
 # Update ~/.condarc for the build.
 # When the conda environment is not stored in the default location /envs,
 # will also need envs_dirs to see the name of a named conda environment with conda env list or conda info --envs.
 conda config --add envs_dirs ${conda_root}/envs
+if [[ ! -w "${conda_root}/pkgs" ]]; then
+  echo "ERROR: pkgs dir not writable: ${conda_root}/pkgs"
+  exit 2
+fi
+
 conda config --add pkgs_dirs ${conda_root}/pkgs
 conda config --env --add channels conda-forge
 conda config --env --set channel_priority strict
@@ -54,8 +80,13 @@ echo "Removing env "${environment}"..."
 # -n,--name: Name of the environment, use if environment was created with --name
 # -p,--prefix: Full path to environment location (i.e. prefix), use if environment was created with --prefix
 conda remove --name ${environment} --all -y
-echo "removing directory "${conda_root}/envs/${environment}"..."
-rm -rf ${conda_root}/envs/${environment}
+# echo "removing directory "${conda_root}/envs/${environment}"..."
+# rm -rf ${conda_root}/envs/${environment}
+if [[ -f /etc/environ.sh ]]; then
+  echo "removing directory ${conda_root}/envs/${environment}..."
+  rm -rf "${conda_root}/envs/${environment}"
+fi
+
 end=$(date +%s)
 echo "Env ${environment} removed. Elapsed time: $((($end-$start1)/60)) minutes"
 
@@ -69,7 +100,10 @@ echo "Env ${environment} created. Elapsed time: $((($end-$start2)/60)) minutes"
 echo "Activating env "${environment}"..."
 # Observation, conda activate returns Your shell has not been properly configured to use conda activate and
 # conda init bash returns No action taken.
-source activate ${environment}
+# source activate ${environment}
+eval "$(conda shell.bash hook)"
+conda activate ${environment}
+
 echo "Env ${environment} activated"
 echo "which conda: "$(which conda)
 echo "which jupyter: "$(which jupyter)
@@ -89,12 +123,25 @@ conda install \
   pyyaml psutil tqdm dask zarr "numcodecs<0.13" \
   pandas matplotlib \
   ipykernel "ipywidgets>=7.6.0,<8" "notebook<7" jupyterlab nbformat nbclient jupyter_client \
-  \
+  -y
+# MPI + HDF5 + mpi4py
+conda install -y -c conda-forge \
   "mpi=1.0=${mpi_impl}" ${mpi_impl} mpi4py \
   "hdf5=*=mpi*" "h5py=*=mpi*" \
   -y
 end=$(date +%s)
 echo "conda install elapsed time: $((($end-$start3)/60)) minutes"
+
+echo "Sanity: check libmpi is present in the conda env..."
+python - <<'PY'
+import os, glob, sys
+prefix = os.environ.get("CONDA_PREFIX", "")
+print("CONDA_PREFIX:", prefix)
+cands = glob.glob(os.path.join(prefix, "lib", "libmpi.so*"))
+print("libmpi candidates:", cands[:10])
+if not cands:
+    raise SystemExit("ERROR: libmpi.so not found in env. MPI runtime missing.")
+PY
 
 # pip-only packages (keep this section small; GHUB prefers most deps via conda)
 start4=$(date +%s)
