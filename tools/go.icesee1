@@ -1,44 +1,52 @@
 #!/bin/bash -l
-# Create the icesee1 environment and associated kernel.
-# Follows naming convention in /apps/share64/debian10/anaconda.
-# For apps build, copy this script to /apps/share64/debian10/anaconda and run there.
-# Make sure the kernel is NOT selected in JupyterLab/Notebook first (nfs device busy risk).
 
+# Create the icesee1 environment and associated kernel.
+# Following naming convention in /apps/share64/debian10/anaconda.
+# For apps build, copied to /apps/share64/debian10/anaconda
+# Need to make sure the associated kernel is not selected in JupyterLab or JupyterNotebooks (202210) first to prevent nfs device busy errors.
+#
 # Usage:
 # ./go.icesee1
-# or:
+# or
 # ./go.icesee1 2>&1 | tee go_icesee1_log.txt | less --RAW-CONTROL-CHARS
+# - will need to explicitly enter a carriage return or Shift+g when prompted with :
+#
+# Also see /data/groups/ghub/tools/icesee/create_icesee1_environment_yml.sh
 
+# Version number.
 version_number="1"
 
+# -e: Environment only.  Act on the current shell.  Do not preserve.
+# -r: Replace an already selected version without prompting.
 . /etc/environ.sh
 conda_choice=anaconda-7
-echo "conda_choice: ${conda_choice}"
+echo "conda_choice: "${conda_choice}
 use -e -r ${conda_choice}
-echo "which conda: $(which conda)"
-echo "which jupyter: $(which jupyter)"
-echo "which python: $(which python)"
+echo "which conda: "$(which conda)
+echo "which jupyter: "$(which jupyter)
+echo "which python: "$(which python)
 
 if [[ "$PWD" == "/apps/share64/debian10/anaconda" ]]; then
     apps="true"
     conda_root=/apps/share64/debian10/anaconda/${conda_choice}
     kernel_root=/apps/share64/debian10/anaconda/${conda_choice}
-    environment="icesee${version_number}"
+    environment=icesee${version_number}
 else
     apps="false"
     conda_root=/data/groups/ghub/tools/icesee
     kernel_root=${HOME}/.local
-    environment="icesee${version_number}-dev"
+    environment=icesee${version_number}-dev
 fi
-
-echo "apps: ${apps}"
-echo "conda_root: ${conda_root}"
-echo "kernel_root: ${kernel_root}"
-echo "environment: ${environment}"
-echo "environment directory: ${conda_root}/envs/${environment}"
+echo "apps: "${apps}
+echo "conda_root: "${conda_root}
+echo "kernel_root: "${kernel_root}
+echo "environment: "${environment}
+echo "environment directory: "${conda_root}/envs/${environment}
 sleep 2
 
 if [[ "${apps}" != "true" ]]; then
+    # Update ~/.condarc for the build.
+    # For the apps build using defaults.
     conda config --add envs_dirs ${conda_root}/envs
     conda config --add pkgs_dirs ${conda_root}/pkgs
 fi
@@ -47,34 +55,125 @@ conda_list=./icesee${version_number}_conda_list.txt
 conda_env_yml=./icesee${version_number}_environment.yml
 
 start1=$(date +%s)
-echo "Removing env ${environment}..."
-conda remove --name ${environment} --all -y || true
+echo "Removing env "${environment}"..."
+# -n,--name: Name of the environment, use if environment was created with --name
+# -p,--prefix: Full path to environment location (i.e. prefix), use if environment was created with --prefix
+conda remove --name ${environment} --all -y
 end=$(date +%s)
 echo "Env ${environment} removed. Elapsed time: $((($end-$start1)/60)) minutes"
 
 start2=$(date +%s)
-echo "Creating env ${environment} from ${conda_env_yml}..."
+echo "Creating env "${environment}"..."
+# -n,--name: Name of the environment
 conda env create --name ${environment} -f ${conda_env_yml}
 end=$(date +%s)
 echo "Env ${environment} created. Elapsed time: $((($end-$start2)/60)) minutes"
 
-echo "Activating env ${environment}..."
+echo "Activating env "${environment}"..."
+# Observation, conda activate returns Your shell has not been properly configured to use conda activate and
+# conda init bash returns No action taken.
 source activate ${environment}
 echo "Env ${environment} activated"
-echo "which jupyter: $(which jupyter)"
-echo "jupyter --version: $(jupyter --version)"
-echo "which python: $(which python)"
+echo "which jupyter: "$(which jupyter)
+echo "jupyter --version: "$(jupyter --version)
+echo "which python: "$(which python)
 
-echo "Installing ICESEE into env ${environment}..."
+echo "Installing ICESEE into env "${environment}"..."
 
 # -------------------------------------------------------------------
-# Point this to a stable ICESEE checkout:
-# - local testing: your local ICESEE repo path
-# - apps install: apps group uses a stable checkout (tag/release)
+# Locate ICESEE checkout for pip install.
+# Local behavior (apps=false): auto-clone ICESEE-GHUB if not found.
+# Apps behavior (apps=true): never auto-clone; expect a stable path via ICESEE_REPO.
 # -------------------------------------------------------------------
-ICESEE_REPO_DEFAULT="${HOME}/da_project/ICESEE"
-ICESEE_REPO="${ICESEE_REPO:-${ICESEE_REPO_DEFAULT}}"
+
+ICESEE_GHUB_URL="${ICESEE_GHUB_URL:-https://github.com/ICESEE-project/ICESEE-GHUB.git}"
+
+# Where to clone for local builds if missing:
+# Keep it under the tool area by default (so it's predictable on GHUB-like machines).
+ICESEE_GHUB_CLONE_DIR_DEFAULT="${conda_root}/src/ICESEE-GHUB"
+ICESEE_GHUB_CLONE_DIR="${ICESEE_GHUB_CLONE_DIR:-${ICESEE_GHUB_CLONE_DIR_DEFAULT}}"
+
+find_icesee_repo() {
+  # 1) explicit override
+  if [[ -n "${ICESEE_REPO:-}" && -f "${ICESEE_REPO}/pyproject.toml" ]]; then
+    echo "${ICESEE_REPO}"
+    return 0
+  fi
+
+  # 2) detect from script location (walk upward looking for external/ICESEE)
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  d="${script_dir}"
+  while [[ "${d}" != "/" ]]; do
+    if [[ -d "${d}/external/ICESEE" && -f "${d}/external/ICESEE/pyproject.toml" ]]; then
+      echo "${d}/external/ICESEE"
+      return 0
+    fi
+    d="$(dirname "${d}")"
+  done
+
+  # 3) detect from current working directory
+  d="${PWD}"
+  while [[ "${d}" != "/" ]]; do
+    if [[ -d "${d}/external/ICESEE" && -f "${d}/external/ICESEE/pyproject.toml" ]]; then
+      echo "${d}/external/ICESEE"
+      return 0
+    fi
+    d="$(dirname "${d}")"
+  done
+
+  # 4) if we already cloned into our default local clone dir
+  if [[ -d "${ICESEE_GHUB_CLONE_DIR}/external/ICESEE" && -f "${ICESEE_GHUB_CLONE_DIR}/external/ICESEE/pyproject.toml" ]]; then
+    echo "${ICESEE_GHUB_CLONE_DIR}/external/ICESEE"
+    return 0
+  fi
+
+  return 1
+}
+
+clone_icesee_ghub_local() {
+  echo "ICESEE not found. Local mode: cloning ICESEE-GHUB..."
+  echo "  repo:  ${ICESEE_GHUB_URL}"
+  echo "  into:  ${ICESEE_GHUB_CLONE_DIR}"
+
+  mkdir -p "$(dirname "${ICESEE_GHUB_CLONE_DIR}")"
+  rm -rf "${ICESEE_GHUB_CLONE_DIR}"
+
+  # Clone with submodules so external/ICESEE is present
+  git clone --recurse-submodules "${ICESEE_GHUB_URL}" "${ICESEE_GHUB_CLONE_DIR}"
+
+  # Safety: ensure submodule is initialized (some git setups still need this)
+  ( cd "${ICESEE_GHUB_CLONE_DIR}" && git submodule update --init --recursive )
+
+  if [[ -f "${ICESEE_GHUB_CLONE_DIR}/external/ICESEE/pyproject.toml" ]]; then
+    echo "Clone OK."
+    echo "${ICESEE_GHUB_CLONE_DIR}/external/ICESEE"
+    return 0
+  fi
+
+  echo "ERROR: Clone completed but external/ICESEE/pyproject.toml not found."
+  return 1
+}
+
+ICESEE_REPO="$(find_icesee_repo || true)"
+
+if [[ -z "${ICESEE_REPO}" ]]; then
+  if [[ "${apps}" != "true" ]]; then
+    ICESEE_REPO="$(clone_icesee_ghub_local || true)"
+  fi
+fi
+
 echo "ICESEE_REPO: ${ICESEE_REPO}"
+
+if [[ -z "${ICESEE_REPO}" || ! -f "${ICESEE_REPO}/pyproject.toml" ]]; then
+  echo "ERROR: Could not locate ICESEE source checkout."
+  echo "Expected ICESEE at: ICESEE-GHUB/external/ICESEE (submodule)."
+  echo ""
+  echo "Fix options:"
+  echo "  1) Local: ensure git is available and network access works, then rerun."
+  echo "  2) Or set ICESEE_REPO explicitly:"
+  echo "       ICESEE_REPO=/path/to/ICESEE ./go.icesee1"
+  exit 2
+fi
 
 if [[ ! -f "${ICESEE_REPO}/pyproject.toml" ]]; then
   echo "ERROR: pyproject.toml not found in ICESEE_REPO=${ICESEE_REPO}"
@@ -84,39 +183,48 @@ fi
 
 python -m pip install -U pip setuptools wheel
 
-# Install with viz extras for GUI + read_results workflow.
-# Add mpi extras only if GHUB MPI stack supports mpi4py.
+# Install ICESEE (editable locally, non-editable for apps build)
 if [[ "${apps}" == "true" ]]; then
-  python -m pip install "${ICESEE_REPO}[viz]"
+  python -m pip install "${ICESEE_REPO}[viz,mpi]"
 else
-  python -m pip install -e "${ICESEE_REPO}[viz]"
+  python -m pip install -e "${ICESEE_REPO}[viz,mpi]"
 fi
 
-# Optional: MPI extras (uncomment when ready on GHUB)
-# python -m pip install "${ICESEE_REPO}[mpi]" || true
+# Sanity: verify mpi4py + h5py(mpi) are actually usable from this kernel env
+python - <<PY
+import mpi4py
+from mpi4py import MPI
+import h5py
+cfg = getattr(h5py, "get_config", lambda: None)()
+print("MPI size:", MPI.COMM_WORLD.Get_size())
+print("h5py mpi:", getattr(cfg, "mpi", None))
+import ICESEE
+print("ICESEE imported from:", ICESEE.__file__)
+PY
 
-echo "Sanity check: import ICESEE"
-python -c "import ICESEE; print('ICESEE imported from:', ICESEE.__file__)"
+echo "Installing the kernel for env "${environment}"..."
+jupyter kernelspec uninstall ${environment} -y
 
-echo "Installing the kernel for env ${environment}..."
-jupyter kernelspec uninstall ${environment} -y || true
 python -m ipykernel install --sys-prefix --name ${environment} --display-name "Python3 (${environment})"
 python -m ipykernel install --prefix ${kernel_root} --name ${environment} --display-name "Python3 (${environment})"
 
 rm -rf ${conda_list}
 conda list > ${conda_list}
 
-echo "Deactivating env ${environment}..."
+echo "Deactivating env "${environment}"..."
 conda deactivate
 echo "Env ${environment} deactivated"
 
-echo "jupyter kernelspec list:"
-jupyter kernelspec list
+echo "which jupyter: "$(which python)
+echo "jupyter --version: "$(jupyter --version)
+echo "which python: "$(which python)
+echo "jupyter kernelspec list: "$(jupyter kernelspec list)
 
 if [[ "${apps}" != "true" ]]; then
+    # Cleanup ~/.condarc
     conda config --remove envs_dirs ${conda_root}/envs
     conda config --remove pkgs_dirs ${conda_root}/pkgs
 fi
 
 end=$(date +%s)
-echo "Done. Total elapsed time: $((($end-$start1)/60)) minutes"
+echo "Done. Total elasped time: $((($end-$start1)/60)) minutes"
