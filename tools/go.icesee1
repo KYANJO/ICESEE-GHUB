@@ -189,6 +189,19 @@ if [[ -z "${ICESEE_REPO}" ]]; then
 fi
 
 echo "ICESEE_REPO: ${ICESEE_REPO}"
+echo "Adding ICESEE parent dir to site-packages via .pth..."
+
+ICESEE_PARENT_DIR="$(dirname "${ICESEE_REPO}")"
+
+python - <<PY
+import os, site
+pth_target = "${ICESEE_PARENT_DIR}"
+sp = site.getsitepackages()[0]
+pth = os.path.join(sp, "icesee_repo.pth")
+with open(pth, "w") as f:
+    f.write(pth_target + "\n")
+print("Wrote:", pth, "->", pth_target)
+PY
 
 if [[ -z "${ICESEE_REPO}" || ! -f "${ICESEE_REPO}/pyproject.toml" ]]; then
   echo "ERROR: Could not locate ICESEE source checkout."
@@ -228,8 +241,19 @@ import h5py
 cfg = getattr(h5py, "get_config", lambda: None)()
 print("MPI size:", MPI.COMM_WORLD.Get_size())
 print("h5py mpi:", getattr(cfg, "mpi", None))
-import ICESEE
-print("ICESEE imported from:", ICESEE.__file__)
+import importlib, sys
+candidates = ["icesee", "ICESEE"]
+for name in candidates:
+    try:
+        m = importlib.import_module(name)
+        print("Imported:", name)
+        print("  file:", getattr(m, "__file__", None))
+        print("  version:", getattr(m, "__version__", None))
+        break
+    except Exception as e:
+        print("Tried import", name, "->", repr(e))
+else:
+    raise SystemExit("ERROR: ICESEE installed but import name not found. Check package layout.")
 PY
 
 echo "Installing the kernel for env "${environment}"..."
