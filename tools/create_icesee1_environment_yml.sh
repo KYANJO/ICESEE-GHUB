@@ -129,6 +129,9 @@ conda install -y -c conda-forge \
   "mpi=1.0=${mpi_impl}" ${mpi_impl} mpi4py \
   "hdf5=*=mpi*" "h5py=*=mpi*" \
   -y
+
+# Jupyter Book for building documentation
+conda install -c conda-forge "jupyter-book=1.*" -y
 end=$(date +%s)
 echo "conda install elapsed time: $((($end-$start3)/60)) minutes"
 
