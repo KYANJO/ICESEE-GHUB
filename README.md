@@ -30,7 +30,6 @@ For detailed implementation and broader documentation, see the [ICESEE Wiki](htt
   - Python 3.8+
   - Anaconda or Miniconda
   - Jupyter Book
-  - Git with submodule support
 
 ##  Quick Start
 
@@ -44,7 +43,7 @@ For detailed implementation and broader documentation, see the [ICESEE Wiki](htt
 ### Local Installation
 
 ```bash
-# Clone the repository with submodules
+# Clone the repository
 git clone  https://github.com/ICESEE-project/ICESEE-GHUB.git
 cd ICESEE-GHUB
 
@@ -79,7 +78,7 @@ ICESEE-GHUB/
 │   ├── _toc.yml            # Table of contents
 │   └── *.md                # Documentation pages
 ├── external/
-│   └── ICESEE/             # ICESEE core (git submodule)
+│   └── ICESEE/             # ICESEE core (git subtree)
 ├── bin/                    # Scripts for launching the book
 ├── middleware/             # GHUB integration scripts
 ├── src/                    # Build system
@@ -108,7 +107,7 @@ python -m http.server 8080
 This repository integrates with the main ICESEE codebase:
 
 - **Core source**: [ICESEE](https://github.com/ICESEE-project/ICESEE)  
-- **Integration method**: Git submodule in `external/ICESEE/`
+- **Integration method**: Git subtree in `external/ICESEE/`
 - **Version pinning**: Tracks the `main` branch for reproducibility (recommended: pin by tag for releases)
 
 ##  Contributing
