@@ -45,11 +45,8 @@ For detailed implementation and broader documentation, see the [ICESEE Wiki](htt
 
 ```bash
 # Clone the repository with submodules
-git clone --recursive https://github.com/ICESEE-project/ICESEE-GHUB.git
+git clone  https://github.com/ICESEE-project/ICESEE-GHUB.git
 cd ICESEE-GHUB
-
-# If you already cloned without --recursive, initialize submodules
-git submodule update --init --recursive
 
 # Build the Jupyter Book
 cd src
