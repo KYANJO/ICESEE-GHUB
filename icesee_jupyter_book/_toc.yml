@@ -13,7 +13,7 @@ parts:
     numbered: false
     chapters:
       - file: icesee_jupyter_notebooks/run_center
-      - file: icesee_jupyter_notebooks/latest_run
+      # - file: icesee_jupyter_notebooks/latest_run
       # - file: icesee_jupyter_notebooks/flowline_gui
       # - file: icesee_jupyter_notebooks/icepack_gui
       # - file: icesee_jupyter_notebooks/issm_gui
@@ -22,9 +22,9 @@ parts:
     numbered: false
     chapters:
       - file: icesee_jupyter_notebooks/run_lorenz96_da.ipynb
-      # - file: icesee_jupyter_notebooks/run_flowline_da.ipynb
-      # - file: icesee_jupyter_notebooks/run_icepack_da.ipynb
-      # - file: icesee_jupyter_notebooks/run_issm_da.ipynb
+  #     # - file: icesee_jupyter_notebooks/run_flowline_da.ipynb
+  #     # - file: icesee_jupyter_notebooks/run_icepack_da.ipynb
+  #     # - file: icesee_jupyter_notebooks/run_issm_da.ipynb
 
   - caption: Deployment Notes
     numbered: false
