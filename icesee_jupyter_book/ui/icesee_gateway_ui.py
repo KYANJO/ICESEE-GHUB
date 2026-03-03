@@ -811,7 +811,7 @@ def build_icesee_ui():
 
     # minimal module/export lines (you can expand later)
     remote_module_lines = W.Textarea(
-        value="module purge || true\n",
+        value="# module load ...\n",
         layout=W.Layout(width="100%", height="80px"),
     )
     remote_export_lines = W.Textarea(
@@ -946,6 +946,8 @@ def build_icesee_ui():
         # write slurm script locally so user can upload via OnDemand Files
         slurm_text = render_slurm_script({...})  # same as SSH branch
         (rd / "slurm_run.sh").write_text(slurm_text)
+        if "{{" in slurm_text or "}}" in slurm_text:
+            raise RuntimeError("SLURM_TEMPLATE render left unresolved placeholders. Check keys passed to render_slurm_script().")
 
         with log_out:
             print("[remote:https] Prepared files in:", rd)
@@ -959,7 +961,7 @@ def build_icesee_ui():
             print("\nTip: OnDemand access may require GT VPN.")
 
         set_status("done")
-    submit_btn.on_click(submit_remote)
+    # submit_btn.on_click(submit_remote)
 
     connect_btn.icon = "terminal"
     submit_btn.icon  = "server"
@@ -1046,7 +1048,7 @@ def build_icesee_ui():
                 PARTITION=slurm_part.value.strip(),
                 MEM=slurm_mem.value.strip(),
                 ACCOUNT=(slurm_account.value.strip() or ""),
-                OUTFILE="steadystate-%j.out",
+                OUTFILE="icesee-enkf-%j.out",
                 MAIL_USER=(slurm_mail.value.strip() or ""),
                 MODULE_LINES=remote_module_lines.value.rstrip(),
                 EXPORT_LINES=remote_export_lines.value.rstrip(),
@@ -1057,6 +1059,9 @@ def build_icesee_ui():
                 ),
             )
         )
+        if "{{" in slurm_text or "}}" in slurm_text:
+            raise RuntimeError("SLURM_TEMPLATE render left unresolved placeholders. Check keys passed to render_slurm_script().")
+        
 
         payload = {
             "kind": "icesee-run",
@@ -1459,15 +1464,40 @@ def build_icesee_ui():
                     print("[remote] NOTE: remote_sbatch configured but not found; falling back to generated slurm_run.sh.")
 
         # Otherwise generate sbatch wrapper that runs python from remote example dir
-        outfile = "steadystate-%j.out"
+        outfile = "icesee-enkf-%j.out"
 
         run_script_name = example_cfg.get("run_script") or find_run_script(example_cfg).name
 
-        run_launch = (
-            f"cd {sh_quote(remote_example_dir)}\n"
-            f"python3 {sh_quote(run_script_name)} "
-            f"-F {sh_quote(rdir + '/params.yaml')} "
-            f"--Nens={int(ens_sl.value)} --model_nprocs={int(cluster_model_nprocs.value)}"
+        # run_launch = (
+        #     f"cd {sh_quote(remote_example_dir)}\n"
+        #     f"python3 {sh_quote(run_script_name)} "
+        #     f"-F {sh_quote(rdir + '/params.yaml')} "
+        #     f"--Nens={int(ens_sl.value)} --model_nprocs={int(cluster_model_nprocs.value)}"
+        # )
+
+        # slurm_text = render_slurm_script(
+        #     dict(
+        #         TIME=slurm_time.value.strip(),
+        #         JOB_NAME=slurm_job_name.value.strip() or "ICESEE",
+        #         NODES=int(slurm_nodes.value),
+        #         NTASKS=int(slurm_ntasks.value),
+        #         TPN=int(slurm_tpn.value),
+        #         PARTITION=slurm_part.value.strip(),
+        #         MEM=slurm_mem.value.strip(),
+        #         ACCOUNT=(slurm_account.value.strip() or "REPLACE_ME"),
+        #         OUTFILE=outfile,
+        #         MODULE_LINES=remote_module_lines.value.rstrip(),
+        #         EXPORT_LINES=remote_export_lines.value.rstrip(),
+        #         SPACK_PATH=spack_path,
+        #         RUN_DIR=rdir,
+        #         RUN_LAUNCH_LINE=run_launch,
+        #     )
+        # )
+
+        # build sbatch optional lines correctly
+        account_line, mail_lines = slurm_optional_lines(
+            slurm_account.value.strip(),
+            slurm_mail.value.strip(),
         )
 
         slurm_text = render_slurm_script(
@@ -1479,15 +1509,29 @@ def build_icesee_ui():
                 TPN=int(slurm_tpn.value),
                 PARTITION=slurm_part.value.strip(),
                 MEM=slurm_mem.value.strip(),
-                ACCOUNT=(slurm_account.value.strip() or "REPLACE_ME"),
+
+                # ✅ these match the template
+                ACCOUNT_LINE=account_line,
+                MAIL_LINES=mail_lines,
+
                 OUTFILE=outfile,
-                MODULE_LINES=remote_module_lines.value.rstrip(),
-                EXPORT_LINES=remote_export_lines.value.rstrip(),
+                MODULE_LINES=sanitize_multiline(remote_module_lines.value),
+                EXPORT_LINES=sanitize_multiline(remote_export_lines.value),
+
                 SPACK_PATH=spack_path,
-                RUN_DIR=rdir,
-                RUN_LAUNCH_LINE=run_launch,
+                NP=int(cluster_mpi_np.value),
+                NENS=int(ens_sl.value),
+                MODEL_NPROCS=int(cluster_model_nprocs.value),
+                RUN_SCRIPT=run_script_name,
+                PARAMS_PATH=f"{rdir}/params.yaml",
+                EXAMPLE_DIR=remote_example_dir,
+
+                # add this so the template doesn’t leave {{SRUN_MPI_FLAG}} behind
+                SRUN_MPI_FLAG="--mpi=pmix",
             )
         )
+        if "{{" in slurm_text or "}}" in slurm_text:
+            raise RuntimeError("SLURM_TEMPLATE render left unresolved placeholders. Check keys passed to render_slurm_script().")
 
         with log_out:
             print("[remote] Remote run dir:", rdir)
@@ -1640,7 +1684,7 @@ def build_icesee_ui():
                 print("[remote][ERROR] No remote dir / JobID. Submit first.")
             return
 
-        out_file = f"{rdir}/steadystate-{jobid}.out"
+        out_file = f"{rdir}/icesee-enkf-{jobid}.out"
         cmd = f"test -f {sh_quote(out_file)} && tail -n 120 {sh_quote(out_file)} || echo 'log not yet created'"
 
         try:
@@ -1757,10 +1801,10 @@ def build_icesee_ui():
     run_btn.on_click(lambda b: run_example())
     clear_btn.on_click(lambda b: (log_out.clear_output(), results_out.clear_output(), set_status("idle")))
 
-    connect_btn.on_click(lambda b: run_example_remote_test())
-    submit_btn.on_click(lambda b: run_example_remote_submit())
-    status_btn.on_click(lambda b: run_example_remote_status())
-    tail_btn.on_click(lambda b: run_example_remote_tail())
+    # connect_btn.on_click(lambda b: run_example_remote_test())
+    # submit_btn.on_click(lambda b: run_example_remote_submit())
+    # status_btn.on_click(lambda b: run_example_remote_status())
+    # tail_btn.on_click(lambda b: run_example_remote_tail())
 
     cloud_submit_btn.on_click(lambda b: run_example_cloud_submit())
     cloud_status_btn.on_click(lambda b: run_example_cloud_status())
