@@ -106,14 +106,14 @@ echo "Installing ICESEE into env "${environment}"..."
 # Robust ICESEE source discovery.
 #
 # Assumptions:
-# - On GHUB, ICESEE-GHUB repo is cloned somewhere and ICESEE is submodule at external/ICESEE.
+# - On GHUB, ICESEE-GHUB repo is cloned somewhere and ICESEE is subtree at external/ICESEE.
 # - go.icesee1 may be located anywhere.
 #
 # Priority:
 #  1) ICESEE_REPO env var (explicit override)
 #  2) Search upwards from PWD for a repo root containing external/ICESEE/pyproject.toml
 #  3) Search upwards from script location for same
-#  4) Local only (apps=false and not GHUB): auto-clone ICESEE-GHUB and use submodule path
+#  4) Local only (apps=false and not GHUB): auto-clone ICESEE-GHUB and use subtree path
 # -------------------------------------------------------------------
 
 ICESEE_GHUB_URL="${ICESEE_GHUB_URL:-https://github.com/ICESEE-project/ICESEE-GHUB.git}"
@@ -150,8 +150,8 @@ clone_icesee_ghub_local() {
   mkdir -p "$(dirname "${ICESEE_GHUB_CLONE_DIR}")"
   rm -rf "${ICESEE_GHUB_CLONE_DIR}"
 
-  git clone --recurse-submodules "${ICESEE_GHUB_URL}" "${ICESEE_GHUB_CLONE_DIR}" >&2
-  ( cd "${ICESEE_GHUB_CLONE_DIR}" && git submodule update --init --recursive ) >&2
+  git clone "${ICESEE_GHUB_URL}" "${ICESEE_GHUB_CLONE_DIR}" >&2
+  ( cd "${ICESEE_GHUB_CLONE_DIR}") >&2
 
   if [[ -f "${ICESEE_GHUB_CLONE_DIR}/external/ICESEE/pyproject.toml" ]]; then
     echo "${ICESEE_GHUB_CLONE_DIR}/external/ICESEE"
