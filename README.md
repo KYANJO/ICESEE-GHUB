@@ -91,14 +91,14 @@ ICESEE-GHUB/
 ##  Building the Book Locally
 
 ```bash
-# Navigate to the source directory
-cd src
+# create a kernal and activate the icesee environment
+./tools/go.icesee1 && source ./tools/create_icesee1_environment_yml.sh
 
-# Install and build
-make install
+# Navigate to the tools directory
+source ./tools/create_icesee1_environment_yml.sh
 
 # View the built book (opens on localhost:8080)
-cd ../icesee_jupyter_book/_build/html
+cd icesee_jupyter_book/_build/html
 python -m http.server 8080
 ```
 
