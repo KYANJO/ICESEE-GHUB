@@ -47,9 +47,8 @@ For detailed implementation and broader documentation, see the [ICESEE Wiki](htt
 git clone  https://github.com/ICESEE-project/ICESEE-GHUB.git
 cd ICESEE-GHUB
 
-# Build the Jupyter Book
-cd src
-make install
+# Get dependencies and the kernal installed and activated
+./tools/go.icesee1 && source ./tools/create_icesee1_environment_yml.sh
 ```
 
 ##  Documentation
@@ -93,9 +92,6 @@ ICESEE-GHUB/
 ```bash
 # create a kernal and activate the icesee environment
 ./tools/go.icesee1 && source ./tools/create_icesee1_environment_yml.sh
-
-# Navigate to the tools directory
-source ./tools/create_icesee1_environment_yml.sh
 
 # View the built book (opens on localhost:8080)
 cd icesee_jupyter_book/_build/html
