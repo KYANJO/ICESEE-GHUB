@@ -645,8 +645,10 @@ def build_icesee_ui():
     gen_report = W.Checkbox(value=True, description="Generate report (read_results.ipynb)")
     open_latest = W.Checkbox(value=False, description="After run: open latest run folder")
 
-    run_btn = W.Button(description="Run", button_style="success", icon="play")
+    # run_btn = W.Button(description="Run", button_style="success", icon="play")
+    action_btn = W.Button(description="Run", button_style="success", icon="play")
     clear_btn = W.Button(description="Clear", button_style="", icon="trash")
+    
 
     status_chip = W.HTML("<span class='icesee-status icesee-idle'>Idle</span>")
     log_out = W.Output(layout=W.Layout(border="1px solid rgba(0,0,0,.12)", padding="10px", height="220px", overflow="auto"))
@@ -657,10 +659,48 @@ def build_icesee_ui():
     # -----------------------------
     MODE_LOCAL, MODE_REMOTE, MODE_CLOUD = "local", "cluster", "cloud"
     mode_tabs = W.Tab()
-    mode_tabs.layout = W.Layout(width="420px")
+    mode_tabs.layout = W.Layout(width="100%")
+    mode_tabs.layout.flex = "1 1 auto"
+    mode_tabs.layout.min_width = "0"
 
     def get_mode():
         return {0: MODE_LOCAL, 1: MODE_REMOTE, 2: MODE_CLOUD}.get(mode_tabs.selected_index, MODE_LOCAL)
+    
+    def update_action_button():
+        mode = get_mode()
+        if mode == MODE_LOCAL:
+            action_btn.description = "Run"
+            action_btn.icon = "play"
+            action_btn.button_style = "success"
+        elif mode == MODE_REMOTE:
+            action_btn.description = "Submit (Remote)"
+            action_btn.icon = "server"
+            action_btn.button_style = "warning"
+        else:
+            action_btn.description = "Submit (Cloud)"
+            action_btn.icon = "cloud-upload"
+            action_btn.button_style = "warning"
+
+    def on_action_click(_=None):
+        # simple anti-double-submit (optional but recommended)
+        if STATUS.get("_busy"):
+            with log_out:
+                print("[ui] Busy — ignoring extra click.")
+            return
+
+        STATUS["_busy"] = True
+        action_btn.disabled = True
+        try:
+            mode = get_mode()
+            if mode == MODE_LOCAL:
+                return run_example_local()
+            elif mode == MODE_REMOTE:
+                return run_example_remote_submit()
+            else:
+                return run_example_cloud_submit()
+        finally:
+            action_btn.disabled = False
+            STATUS["_busy"] = False
 
     # =========================================================
     # Params UI (auto from template)
@@ -837,7 +877,7 @@ def build_icesee_ui():
         layout=W.Layout(width="100%", height="80px")
     )
 
-    https_box = W.VBox([
+    https_webhook_box = W.VBox([
     W.HTML("<div class='icesee-subtle'>HTTPS backend (user-provided webhook/service)</div>"),
     W.HBox([W.HTML("<div class='icesee-lbl'>Base URL:</div>"), https_base], layout=W.Layout(gap="12px")),
     W.HBox([W.HTML("<div class='icesee-lbl'>Paths:</div>"),
@@ -894,7 +934,7 @@ def build_icesee_ui():
     # existing SSH fields: host/user/port/auth/... and buttons
     ])
 
-    https_box = W.VBox([
+    ondemand_box = W.VBox([
         W.HTML("<div class='icesee-subtle'>OnDemand (web portal)</div>"),
         W.HBox([W.HTML("<div class='icesee-lbl'>Portal:</div>"), ood_cluster], layout=W.Layout(gap="12px")),
         W.HBox([open_ood_btn], layout=W.Layout(gap="10px")),
@@ -904,13 +944,13 @@ def build_icesee_ui():
     def _toggle_remote_backend(_=None):
         is_ssh = (remote_backend.value == "ssh")
         ssh_box.layout.display = "block" if is_ssh else "none"
-        https_box.layout.display = "none" if is_ssh else "block"
+        ondemand_box.layout.display = "none" if is_ssh else "block"
 
     remote_backend.observe(_toggle_remote_backend, names="value")
     _toggle_remote_backend()
     W.HBox([W.HTML("<div class='icesee-lbl'>Backend:</div>"), remote_backend], layout=W.Layout(gap="12px")),
     ssh_box,
-    https_box,
+    ondemand_box,
 
     def on_test_remote(_=None):
         log_out.clear_output()
@@ -1167,10 +1207,10 @@ def build_icesee_ui():
             with log_out:
                 print("[remote:https][ERROR]", type(e).__name__, e)
 
-    connect_btn.on_click(lambda b: remote_test())
-    submit_btn.on_click(lambda b: remote_submit())
-    status_btn.on_click(lambda b: remote_status())
-    tail_btn.on_click(lambda b: remote_tail())
+    # connect_btn.on_click(lambda b: remote_test())
+    # submit_btn.on_click(lambda b: remote_submit())
+    # status_btn.on_click(lambda b: remote_status())
+    # tail_btn.on_click(lambda b: remote_tail())
 
     def rsh(host, user, port, cmd, timeout=60):
         """SSH run with a timeout and returned stdout/stderr."""
@@ -1798,13 +1838,14 @@ def build_icesee_ui():
     # =========================================================
     # Wire buttons
     # =========================================================
-    run_btn.on_click(lambda b: run_example())
+    # run_btn.on_click(lambda b: run_example())
+    action_btn.on_click(on_action_click)
     clear_btn.on_click(lambda b: (log_out.clear_output(), results_out.clear_output(), set_status("idle")))
 
-    # connect_btn.on_click(lambda b: run_example_remote_test())
-    # submit_btn.on_click(lambda b: run_example_remote_submit())
-    # status_btn.on_click(lambda b: run_example_remote_status())
-    # tail_btn.on_click(lambda b: run_example_remote_tail())
+    connect_btn.on_click(lambda b: run_example_remote_test())
+    submit_btn.on_click(lambda b: run_example_remote_submit())
+    status_btn.on_click(lambda b: run_example_remote_status())
+    tail_btn.on_click(lambda b: run_example_remote_tail())
 
     cloud_submit_btn.on_click(lambda b: run_example_cloud_submit())
     cloud_status_btn.on_click(lambda b: run_example_cloud_status())
@@ -1818,11 +1859,12 @@ def build_icesee_ui():
     ens_sl.observe(_sync_knobs, names="value")
     seed_in.observe(_sync_knobs, names="value")
 
-    # =========================================================
+   # =========================================================
     # UX CSS
     # =========================================================
     css = """
     <style>
+    /* --- your existing styles --- */
     .icesee-wrap { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
     .icesee-title { font-size: 18px; font-weight: 700; margin: 6px 0 4px; }
     .icesee-subtitle { color: rgba(0,0,0,.65); margin-bottom: 14px; }
@@ -1836,6 +1878,25 @@ def build_icesee_ui():
     .icesee-running { background: rgba(16, 122, 255, .12); }
     .icesee-done { background: rgba(30, 170, 80, .14); }
     .icesee-fail { background: rgba(220, 60, 60, .14); }
+
+    /* --- make notebook/page use full width (JLab/classic) --- */
+    .jp-NotebookPanel, .jp-Notebook, .jp-Cell, .jp-OutputArea { max-width: 100% !important; }
+    .icesee-page { width: 100% !important; }
+
+    /* --- stretch left/right columns properly --- */
+    .icesee-row { display: flex; gap: 26px; width: 100%; align-items: stretch; }
+    .icesee-col { flex: 1 1 0; min-width: 0; }  /* min-width:0 is KEY */
+
+    /* --- outputs: full width + readable long lines --- */
+    .icesee-out { width: 100% !important; }
+    .icesee-out .output_area pre {
+    white-space: pre;      /* keep formatting */
+    overflow-x: auto;      /* horizontal scroll for long lines */
+    }
+
+    /* Optional: if you're in Jupyter Book and it's still constrained, uncomment:
+    .bd-main .bd-content, .bd-container, .container-xl, .container-lg { max-width: 100% !important; }
+    */
     </style>
     """
     display(W.HTML(css))
@@ -1877,7 +1938,8 @@ def build_icesee_ui():
             W.HBox([W.HTML("<div class='icesee-lbl'>SLURM_DIR:</div>"), spack_slurm_dir], layout=W.Layout(gap="12px")),
             W.HBox([W.HTML("<div class='icesee-lbl'>PMIX_DIR:</div>"),  spack_pmix_dir],  layout=W.Layout(gap="12px")),
             W.Box([spack_use_existing_sbatch], layout=W.Layout(margin="0 0 0 120px")),
-            W.HBox([connect_btn, submit_btn, status_btn, tail_btn], layout=W.Layout(gap="10px")),
+            # W.HBox([connect_btn, submit_btn, status_btn, tail_btn], layout=W.Layout(gap="10px")),
+            W.HBox([connect_btn, status_btn, tail_btn], layout=W.Layout(gap="10px")),
             W.HTML("<div class='icesee-subtle' style='margin-top:8px'>Slurm resources</div>"),
             W.HBox(
                 [W.HTML("<div class='icesee-lbl'>Job:</div>"), slurm_job_name, W.HTML("<div class='icesee-lbl'>Time:</div>"), slurm_time],
@@ -1938,6 +2000,10 @@ def build_icesee_ui():
     mode_tabs.set_title(1, "Remote")
     mode_tabs.set_title(2, "Cloud")
 
+    local_tab_card.layout = W.Layout(width="100%")
+    cluster_panel.layout   = W.Layout(width="100%")
+    cloud_panel.layout     = W.Layout(width="100%")
+
     def _toggle_panels_from_tabs(_=None):
         mode = get_mode()
         cluster_panel.layout.display = "block" if mode == MODE_REMOTE else "none"
@@ -1954,13 +2020,22 @@ def build_icesee_ui():
         cloud_status_btn.disabled = not is_cloud
         cloud_logs_btn.disabled = not is_cloud
 
+    # mode_tabs.observe(_toggle_panels_from_tabs, names="selected_index")
+    # _toggle_panels_from_tabs()
+    def _toggle_panels_from_tabs(_=None):
+        mode = get_mode()
+        # (keep your existing enable/disable logic here)
+
+        update_action_button()
+
     mode_tabs.observe(_toggle_panels_from_tabs, names="selected_index")
     _toggle_panels_from_tabs()
+    update_action_button()
 
     left = W.VBox(
         [
             W.HTML("<div class='icesee-h'>Run settings</div>"),
-            W.HBox([W.HTML("<div class='icesee-lbl'>Mode:</div>"), mode_tabs], layout=W.Layout(gap="12px")),
+            W.HBox([W.HTML("<div class='icesee-lbl'>Mode:</div>"), mode_tabs], layout=W.Layout(gap="12px", width="100%")),
             W.HBox([W.HTML("<div class='icesee-lbl'>Example:</div>"), example_dd], layout=W.Layout(gap="12px")),
             W.HBox([W.HTML("<div class='icesee-lbl'>Preset:</div>"), preset_dd], layout=W.Layout(gap="12px")),
             W.HBox([W.HTML("<div class='icesee-lbl'>Filter:</div>"), filter_alg_dd], layout=W.Layout(gap="12px")),
@@ -1976,6 +2051,7 @@ def build_icesee_ui():
     )
     left_card = W.VBox([left])
     left_card.add_class("icesee-card")
+    left_card.layout = W.Layout(width="100%")
 
     right = W.VBox(
         [
@@ -1988,11 +2064,28 @@ def build_icesee_ui():
     right_card = W.VBox([right])
     right_card.add_class("icesee-card")
 
-    actions = W.HBox([run_btn, clear_btn, status_chip], layout=W.Layout(gap="12px"))
+    log_out.add_class("icesee-out")
+    results_out.add_class("icesee-out")
+
+    # actions = W.HBox([run_btn, clear_btn, status_chip], layout=W.Layout(gap="12px"))
+    actions = W.HBox([action_btn, clear_btn, status_chip], layout=W.Layout(gap="12px"))
     actions_card = W.VBox([W.HTML("<div class='icesee-h'>Status</div>"), actions])
     actions_card.add_class("icesee-card")
 
-    page = W.VBox([header, W.HBox([left_card, right_card], layout=W.Layout(gap="26px")), actions_card])
+    left_card.add_class("icesee-col")
+    right_card.add_class("icesee-col")
+
+    row = W.HBox([left_card, right_card], layout=W.Layout(width="100%", display="flex", gap="26px"))
+    row.add_class("icesee-row")
+
+    page = W.VBox([header, row, actions_card], layout=W.Layout(width="100%"))
+    page.add_class("icesee-page")
+
+    cloud_submit_btn.layout.display = "none"
+
+    row = W.HBox([left_card, right_card], layout=W.Layout(width="100%", display="flex", gap="26px"))
+    page = W.VBox([header, row, actions_card], layout=W.Layout(width="100%"))
+    # page = W.VBox([header, W.HBox([left_card, right_card], layout=W.Layout(gap="26px")), actions_card])
     # display(page)
 
     set_status("idle")
