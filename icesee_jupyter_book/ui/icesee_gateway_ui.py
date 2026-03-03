@@ -218,6 +218,34 @@ def mirror_assets_for_report(example_cfg: dict, rd: Path):
                 shutil.rmtree(dst)
             shutil.copytree(src, dst)
 
+def ensure_report_h5(rd: Path, example_cfg: dict, expected_prefix: str, log_out: W.Output):
+    """
+    Ensure results/<expected_prefix>-<model>.h5 exists in rd for report notebooks.
+    If missing, search for any *-<model>.h5 under rd/results or the example base, and copy.
+    """
+    model_name = example_cfg.get("model_name", "lorenz")
+    exp = rd / "results" / f"{expected_prefix}-{model_name}.h5"
+    if exp.exists():
+        return exp
+
+    # 1) search inside this run dir first
+    candidates = sorted((rd / "results").glob(f"*-{model_name}.h5"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+    # 2) also search in the example base (some scripts write there)
+    if not candidates:
+        base = example_cfg["base"]
+        candidates = sorted(base.glob(f"**/results/*-{model_name}.h5"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+    if candidates:
+        exp.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(candidates[0], exp)
+        with log_out:
+            print(f"[wrapper] Report shim: copied {candidates[0].name} -> {exp.name}")
+        return exp
+
+    with log_out:
+        print(f"[wrapper] WARNING: expected report H5 not found: {exp}")
+    return exp
 
 def run_report_notebook(report_nb: Path | None, example_cfg: dict, rd: Path, log_out: W.Output):
     if not report_nb or not report_nb.exists():
@@ -781,6 +809,8 @@ def build_icesee_ui():
             try:
                 with log_out:
                     print("[local] Running report notebook…")
+                # Make sure report sees the expected file name
+                ensure_report_h5(rd, example_cfg, output_label_dd.value, log_out)
                 run_report_notebook(REPORT_NB, example_cfg, rd, log_out)
                 with log_out:
                     print("[local] Report done.")
