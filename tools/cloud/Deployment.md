@@ -51,10 +51,14 @@ After cloning, the relevant deployment files are:
 
 ## Container Strategy
 
-| Environment | Format | MATLAB | MPI |
-|-------------|--------|--------|-----|
-| AWS EC2 / cloud | Docker image | Inbuilt (MathWorks base image) | OpenMPI with PMIx, inside container |
-| HPC (non-PACE) | Apptainer `.sif` | Inbuilt | OpenMPI with PMIx, inside container |
+| Environment | Format | Image | MATLAB | MPI |
+|-------------|--------|-------|--------|-----|
+| AWS EC2 / cloud | Docker → Apptainer `.sif` | `bkyanjo/icesee-applications:v1.0` | Inbuilt | OpenMPI 5.0.10 + PMIx, inside container |
+| HPC (non-PACE) | Apptainer `.sif` | `bkyanjo/icesee-applications:v1.0` | Inbuilt | OpenMPI 5.0.10 + PMIx, inside container |
+
+**Published image:** `docker.io/bkyanjo/icesee-applications:v1.0`
+- Index digest: `sha256:59799aa610636dcec4fd974b2f042178a0ca2648e951f62798ea28493f20eff8`
+- Manifest: `sha256:27d54a876bbc0455d80cb711d8ed05adda0acfaa31d0436d428fbc3fcfd0214a`
 
 Since MATLAB is embedded, there is no host bind-mount requirement for MATLAB on any target cluster.
 
@@ -62,49 +66,35 @@ Since MATLAB is embedded, there is no host bind-mount requirement for MATLAB on 
 
 ## Building the Container
 
+The image is already built and published to Docker Hub. No local build step is required.
+
 ### Docker (cloud)
 
-The Dockerfile builds on top of `docker.io/bkyanjo/combined-lean:v1.0` — the base image already contains MATLAB, ISSM, Firedrake, Icepack, and the Spack-managed MPI/HDF5 stack. The build step only adds ICESEE dependencies and the runtime wrappers.
-
 ```bash
-# Build
-docker build -t icesee-issm:latest .
+# Pull the published image
+docker pull bkyanjo/icesee-applications:v1.0
 
-# Verify wrappers (mirrors the Apptainer %test section)
-docker run --rm icesee-issm:latest with-firedrake python -c "import firedrake; print('firedrake ok')"
-docker run --rm icesee-issm:latest with-icepack  python -c "import icepack;    print('icepack ok')"
-docker run --rm icesee-issm:latest with-icesee   python -c "import ICESEE;     print('ICESEE ok')"
-docker run --rm icesee-issm:latest with-issm bash -c 'test -f /opt/ISSM/etc/environment.sh && echo "issm wrapper ok"'
-
-# Push to a registry (ECR example)
-aws ecr get-login-password --region us-east-1 \
-  | docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
-
-docker tag icesee-issm:latest \
-  <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/icesee-issm:latest
-
-docker push <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/icesee-issm:latest
+# Verify (optional — image has already been tested)
+docker run --rm bkyanjo/icesee-applications:v1.0 with-firedrake python -c "import firedrake; print('firedrake ok')"
+docker run --rm bkyanjo/icesee-applications:v1.0 with-icepack  python -c "import icepack;    print('icepack ok')"
+docker run --rm bkyanjo/icesee-applications:v1.0 with-icesee   python -c "import ICESEE;     print('ICESEE ok')"
+docker run --rm bkyanjo/icesee-applications:v1.0 with-issm bash -c 'test -f /opt/ISSM/etc/environment.sh && echo "issm wrapper ok"'
 ```
 
 ### Apptainer (HPC)
 
+On any cluster with Apptainer, convert the Docker image to a `.sif` directly from Docker Hub — no intermediate Docker install needed:
+
 ```bash
-# Build from definition file
-apptainer build combined-env-inbuilt-matlab.sif combined-env-inbuilt-matlab.def
+# Pull and convert in one step
+apptainer pull icesee-applications-v1.0.sif docker://bkyanjo/icesee-applications:v1.0
 
-# Or convert the Docker image to .sif (if built/pulled separately)
-apptainer pull docker://icesee-issm:latest
-
-# Quick sanity check
-apptainer exec combined-env-inbuilt-matlab.sif \
-  with-issm bash -c '
-    echo "PY=$(command -v python)"
-    echo "MPI=$(command -v mpiexec)"
-    echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-  '
+# Pin to the exact manifest digest for reproducibility
+apptainer pull icesee-applications-v1.0.sif \
+  docker://bkyanjo/icesee-applications@sha256:27d54a876bbc0455d80cb711d8ed05adda0acfaa31d0436d428fbc3fcfd0214a
 ```
 
-> **Tip:** Build the `.sif` once on a login node and copy it to `/scratch` or a shared filesystem so all compute nodes can access it without rebuilding.
+> **Tip:** Run the pull once on a login node, store the `.sif` on `/scratch` or a shared filesystem, and reference that path in all job scripts. Compute nodes never need internet access.
 
 ---
 
@@ -150,27 +140,30 @@ apptainer exec combined-env-inbuilt-matlab.sif \
 
 ### Uploading the Container
 
-Copy the `.sif` image to the shared FSx filesystem:
+Pull the image directly from Docker Hub onto the shared FSx filesystem — no local transfer needed:
 
 ```bash
-# From your local machine
-scp combined-env-inbuilt-matlab.sif \
-  ec2-user@<HEAD_NODE_IP>:/scratch/containers/
+# SSH into the head node, then:
+mkdir -p /scratch/containers
+apptainer pull /scratch/containers/icesee-applications-v1.0.sif \
+  docker://bkyanjo/icesee-applications:v1.0
 
-# Or pull directly on the head node from S3
-aws s3 cp s3://YOUR-BUCKET/containers/combined-env-inbuilt-matlab.sif \
-  /scratch/containers/
+# Or pin to the exact digest for strict reproducibility
+apptainer pull /scratch/containers/icesee-applications-v1.0.sif \
+  docker://bkyanjo/icesee-applications@sha256:27d54a876bbc0455d80cb711d8ed05adda0acfaa31d0436d428fbc3fcfd0214a
 ```
+
+> The head node needs outbound internet access (TCP 443) to reach Docker Hub. Compute nodes only need access to FSx — they never pull from the internet directly.
 
 ### Running a Job on AWS
 
-Edit `run_icesee_issm.slurm`:
+Edit `run_icesee_issm.slurm` — only two lines need changing:
 
 ```bash
-# Set the container path
-SIF=/scratch/containers/combined-env-inbuilt-matlab.sif
+# Point to the pulled .sif on FSx
+SIF=/scratch/containers/icesee-applications-v1.0.sif
 
-# Set bind mounts to FSx paths
+# Bind mounts to FSx paths
 BINDS="/scratch/ICESEE:/opt/ICESEE,/scratch/runs/${SLURM_JOB_ID}/examples:/opt/ISSM/examples,/scratch/runs/${SLURM_JOB_ID}/execution:/opt/ISSM/execution"
 ```
 
