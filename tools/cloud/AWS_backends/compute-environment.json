@@ -1,0 +1,17 @@
+{
+  "computeEnvironmentName": "icesee-online-ce",
+  "type": "MANAGED",
+  "state": "ENABLED",
+  "serviceRole": "arn:aws:iam::233636046012:role/AWSBatchServiceRole",
+  "computeResources": {
+    "type": "EC2",
+    "allocationStrategy": "BEST_FIT_PROGRESSIVE",
+    "minvCpus": 0,
+    "maxvCpus": 64,
+    "desiredvCpus": 0,
+    "instanceTypes": ["m6i.2xlarge"],
+    "subnets": ["subnet-0ca4b87e5bb3e6c82", "subnet-08d2454839811a73a"],
+    "securityGroupIds": ["sg-09b3225de1ac95232"],
+    "instanceRole": "arn:aws:iam::233636046012:instance-profile/ecsInstanceRole"
+  }
+}
