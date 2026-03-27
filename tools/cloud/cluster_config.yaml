@@ -1,0 +1,136 @@
+# ============================================================
+# AWS ParallelCluster 3.x Configuration
+# ICESEE + ISSM Data Assimilation Cluster
+# ============================================================
+#
+# Prerequisites:
+#   1. AWS CLI configured with appropriate IAM permissions
+#   2. pcluster CLI installed: pip install aws-parallelcluster
+#   3. An existing VPC, subnet, and EC2 key pair
+#   4. The .sif container image uploaded to an S3 bucket
+#      or pre-built on a shared FSx/EFS filesystem
+#
+# Deploy:
+#   pcluster create-cluster \
+#     --cluster-name icesee-issm \
+#     --cluster-configuration cluster-config.yaml
+#
+# SSH in:
+#   pcluster ssh --cluster-name icesee-issm -i ~/.ssh/your-key.pem
+# ============================================================
+
+Region: us-east-1       # ← change to your preferred region
+
+Image:
+  Os: ubuntu2204        # Ubuntu 22.04 — matches container base image
+
+HeadNode:
+  InstanceType: c5.xlarge
+  Networking:
+    SubnetId: subnet-XXXXXXXXXXXXXXXXX    # ← your subnet ID
+  Ssh:
+    KeyName: your-keypair-name            # ← your EC2 key pair
+  LocalStorage:
+    RootVolume:
+      Size: 100
+      VolumeType: gp3
+  Iam:
+    AdditionalIamPolicies:
+      - Policy: arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess  # for pulling .sif from S3
+  CustomActions:
+    OnNodeConfigured:
+      Script: s3://YOUR-BUCKET/scripts/setup-head.sh           # ← optional setup script
+
+Scheduling:
+  Scheduler: slurm
+  SlurmSettings:
+    EnableMemoryBasedScheduling: true
+  SlurmQueues:
+    # ── Compute queue (MPI ensemble runs) ────────────────────
+    - Name: compute
+      CapacityType: ONDEMAND
+      Networking:
+        SubnetIds:
+          - subnet-XXXXXXXXXXXXXXXXX                           # ← your subnet ID
+        PlacementGroup:
+          Enabled: true          # keeps nodes close — important for MPI latency
+      ComputeResources:
+        - Name: hpc-nodes
+          InstanceType: c5n.18xlarge   # 72 vCPU, 192 GiB, 100 Gbps EFA — good for MPI
+          # Alternatives:
+          #   hpc6a.48xlarge  — AMD, EFA, cost-effective for tightly-coupled MPI
+          #   c5n.9xlarge     — smaller, 36 vCPU, lower cost per run
+          MinCount: 0
+          MaxCount: 8            # scale to 8 nodes (576 cores) max
+          Efa:
+            Enabled: true        # Elastic Fabric Adapter — low-latency MPI
+      CustomSlurmSettings:
+        DefMemPerCPU: 3800
+        Sockets: 2
+        CoresPerSocket: 18
+
+    # ── Spot queue (dev / parameter sweeps) ──────────────────
+    - Name: spot
+      CapacityType: SPOT
+      Networking:
+        SubnetIds:
+          - subnet-XXXXXXXXXXXXXXXXX
+      ComputeResources:
+        - Name: spot-nodes
+          InstanceType: c5n.9xlarge
+          MinCount: 0
+          MaxCount: 16
+          SpotPrice: "1.50"      # max spot price in USD/hr — adjust as needed
+      CustomSlurmSettings:
+        DefMemPerCPU: 3800
+
+SharedStorage:
+  # ── FSx Lustre — high-throughput parallel filesystem ─────
+  - Name: fsx-scratch
+    StorageType: FsxLustre
+    MountDir: /scratch
+    FsxLustreSettings:
+      StorageCapacity: 1200      # GiB — minimum is 1200 for SCRATCH_2
+      DeploymentType: SCRATCH_2
+      DataCompressionType: LZ4
+      PerUnitStorageThroughput: 200  # MB/s per TiB
+  # Store .sif image, ICESEE source, and outputs here:
+  #   /scratch/containers/combined-env-inbuilt-matlab.sif
+  #   /scratch/ICESEE/
+  #   /scratch/runs/<job-id>/
+
+Monitoring:
+  Logs:
+    CloudWatch:
+      Enabled: true
+      RetentionInDays: 14
+  Dashboards:
+    CloudWatch:
+      Enabled: true
+
+Tags:
+  - Key: Project
+    Value: ICESEE
+  - Key: Environment
+    Value: HPC
+
+# ── Notes ─────────────────────────────────────────────────────
+# 1. MPI over EFA requires the container's OpenMPI to be built
+#    with --with-pmix. The provided Dockerfile does this.
+#
+# 2. Apptainer must be installed on compute nodes. Add to
+#    setup-head.sh or use a custom AMI with Apptainer pre-installed:
+#
+#      sudo apt-get install -y apptainer
+#
+# 3. To use a custom AMI with Apptainer pre-installed:
+#    Uncomment and set the AMI ID below:
+#
+# Image:
+#   CustomAmi: ami-XXXXXXXXXXXXXXXXX
+#
+# 4. MATLAB license: set MLM_LICENSE_FILE in your SLURM script
+#    or point to a MathWorks Network License Manager accessible
+#    from within the VPC:
+#
+#      export MLM_LICENSE_FILE=27000@license-server.internal

@@ -1,0 +1,21 @@
+{
+  "jobDefinitionName": "icesee-online-issm",
+  "type": "container",
+  "platformCapabilities": ["EC2"],
+  "containerProperties": {
+    "image": "public.ecr.aws/h2q3k1l2/icesee-project/icesee-online@sha256:6722cb2fb1edf7a3dc868d041f12d98634567e8bced2cc7e2572a0e5ba198d7a",
+    "command": [
+      "bash",
+      "-lc",
+      "cd /opt/ICESEE/applications/issm_model/examples/ISMIP_Choi && with-issm python run_da_issm.py --Nens=4 --model_nprocs=1 --verbose"
+    ],
+    "resourceRequirements": [
+      { "type": "VCPU", "value": "4" },
+      { "type": "MEMORY", "value": "16384" }
+    ],
+    "environment": [
+      { "name": "ICESEE_CONTAINER", "value": "1" },
+      { "name": "ICESEE_ROOT", "value": "/opt/ICESEE" }
+    ]
+  }
+}
