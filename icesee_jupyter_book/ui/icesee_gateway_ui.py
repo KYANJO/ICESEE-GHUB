@@ -21,6 +21,7 @@ import time
 import json
 import yaml
 import shutil
+import getpass
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,7 +82,7 @@ EXAMPLES = {
         remote_sbatch="run_job_spack.sbatch",  # you said this exists
     ),
     "Flowline (under development)": dict(
-        enabled=False,
+        enabled=True,
         base=EXT / "applications" / "flowline_model" / "examples" / "flowline_1d",
         run_script="run_da_flowline.py",
         params="params.yaml",
@@ -93,7 +94,7 @@ EXAMPLES = {
         remote_sbatch=None,
     ),
     "Icepack (under development)": dict(
-        enabled=False,
+        enabled=True,
         base=EXT / "applications" / "icepack_model" / "examples" / "synthetic_ice_stream",
         run_script="run_da_icepack.py",
         params="params.yaml",
@@ -506,6 +507,126 @@ def remote_stage_and_submit(
         raise RuntimeError(f"Could not parse JobID from:\n{r.stdout}\n{r.stderr}")
     return m.group(1)
 
+def ensure_local_ssh_key(log_out: W.Output, key_type: str = "ed25519") -> tuple[Path, Path]:
+    """
+    Ensure ~/.ssh/id_<type> and .pub exist. If not, generate them non-interactively.
+    Returns (private_key_path, public_key_path).
+    """
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(ssh_dir, 0o700)
+
+    priv = ssh_dir / f"id_{key_type}"
+    pub  = ssh_dir / f"id_{key_type}.pub"
+
+    if pub.exists() and priv.exists():
+        return priv, pub
+
+    with log_out:
+        print(f"[auth] Generating SSH keypair: {priv.name}")
+
+    # Generate keypair
+    cmd = [
+        "ssh-keygen",
+        "-t", key_type,
+        "-f", str(priv),
+        "-N", "",                 # empty passphrase (for non-interactive GHUB use)
+        "-C", f"icesee-{getpass.getuser()}",
+    ]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if p.returncode != 0:
+        raise RuntimeError(p.stderr or p.stdout or "ssh-keygen failed")
+
+    os.chmod(priv, 0o600)
+    os.chmod(pub, 0o644)
+    return priv, pub
+
+
+def _paramiko_connect_password(host: str, user: str, port: int, password: str, timeout: int = 20):
+    try:
+        import paramiko
+    except Exception as e:
+        raise RuntimeError(
+            "Paramiko is required for password bootstrap. Install with: pip install paramiko"
+        ) from e
+
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+        hostname=host,
+        port=int(port),
+        username=user,
+        password=password,
+        timeout=timeout,
+        banner_timeout=timeout,
+        auth_timeout=timeout,
+        look_for_keys=False,
+        allow_agent=False,
+    )
+    return client
+
+
+def remote_install_pubkey_with_password(
+    *,
+    host: str,
+    user: str,
+    port: int,
+    password: str,
+    pubkey_text: str,
+    log_out: W.Output,
+):
+    """
+    Connect using Paramiko password auth and add pubkey to ~/.ssh/authorized_keys safely.
+    Idempotent: won't duplicate the key if already installed.
+    """
+    client = _paramiko_connect_password(host, user, port, password, timeout=25)
+
+    # Normalize key line
+    key_line = pubkey_text.strip()
+    if not key_line or "ssh-" not in key_line:
+        client.close()
+        raise ValueError("Public key text looks invalid.")
+
+    # Remote commands: create ~/.ssh, set perms, append key if missing
+    # Using sh to keep it portable.
+    cmd = f"""
+set -e
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+touch ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+# Append key if not already present
+grep -Fqx {sh_quote(key_line)} ~/.ssh/authorized_keys || echo {sh_quote(key_line)} >> ~/.ssh/authorized_keys
+echo OK
+"""
+    stdin, stdout, stderr = client.exec_command(cmd)
+    out = stdout.read().decode("utf-8", errors="replace")
+    err = stderr.read().decode("utf-8", errors="replace")
+    rc = stdout.channel.recv_exit_status()
+    client.close()
+
+    with log_out:
+        print("[auth] remote authorized_keys update rc:", rc)
+        if out.strip():
+            print("[auth] stdout:", out.strip())
+        if err.strip():
+            print("[auth] stderr:", err.strip())
+
+    if rc != 0:
+        raise RuntimeError(err or out or "Failed to update authorized_keys")
+
+
+def explain_ssh_failure_hint(stderr: str) -> str:
+    s = (stderr or "").lower()
+    if "permission denied" in s:
+        return "Auth failed (Permission denied). If you normally type a password in a terminal, use Bootstrap with password once."
+    if "could not resolve hostname" in s:
+        return "Host not reachable / DNS issue."
+    if "operation timed out" in s or "connection timed out" in s:
+        return "Connection timed out (VPN/firewall/host unreachable)."
+    if "keyboard-interactive" in s or "authentication" in s:
+        return "Interactive auth is being requested. BatchMode blocks it; bootstrap keys or use OnDemand."
+    return "SSH failed. Check host/user/VPN and whether passwordless key auth is enabled."
 
 # ============================================================
 # 7) Cloud backend (AWS CLI + AWS Batch)
@@ -827,6 +948,24 @@ def build_icesee_ui():
     cluster_host = W.Text(value="login-phoenix-rh9.pace.gatech.edu", layout=W.Layout(width="320px"))
     cluster_user = W.Text(value=os.environ.get("USER", ""), placeholder="username", layout=W.Layout(width="320px"))
     cluster_port = W.IntText(value=22, layout=W.Layout(width="120px"))
+    
+    auth_mode = W.ToggleButtons(
+    options=[("Key-only", "key"), ("Bootstrap with password (one-time)", "bootstrap")],
+    value="key",
+    layout=W.Layout(width="420px")
+    )
+
+    cluster_password = W.Password(
+        value="",
+        placeholder="One-time password (not stored)",
+        layout=W.Layout(width="320px")
+    )
+
+    bootstrap_btn = W.Button(
+        description="Enable passwordless SSH",
+        icon="key",
+        button_style="warning"
+    )
 
     remote_base_dir = W.Text(value="~/r-arobel3-0", layout=W.Layout(width="320px"))
     remote_tag = W.Text(value="icesee", layout=W.Layout(width="220px"))
@@ -835,6 +974,7 @@ def build_icesee_ui():
     submit_btn = W.Button(description="Submit job", icon="server", button_style="warning")
     status_btn = W.Button(description="Check status", icon="tasks", button_style="")
     tail_btn = W.Button(description="Tail log", icon="file-text", button_style="")
+    terminate_btn = W.Button(description="Terminate job",icon="stop",button_style="danger")
 
     slurm_job_name = W.Text(value="ICESEE", layout=W.Layout(width="220px"))
     slurm_time = W.Text(value="50:00:00", layout=W.Layout(width="220px"))
@@ -1002,6 +1142,14 @@ def build_icesee_ui():
 
         set_status("done")
     # submit_btn.on_click(submit_remote)
+
+    def _toggle_auth_widgets(_=None):
+        show = (auth_mode.value == "bootstrap")
+        cluster_password.layout.display = "block" if show else "none"
+        bootstrap_btn.layout.display = "block" if show else "none"
+
+    auth_mode.observe(_toggle_auth_widgets, names="value")
+    _toggle_auth_widgets()
 
     connect_btn.icon = "terminal"
     submit_btn.icon  = "server"
@@ -1212,6 +1360,66 @@ def build_icesee_ui():
     # status_btn.on_click(lambda b: remote_status())
     # tail_btn.on_click(lambda b: remote_tail())
 
+    def on_bootstrap_keys(_=None):
+        log_out.clear_output()
+        set_status("running")
+
+        host = cluster_host.value.strip()
+        user = cluster_user.value.strip()
+        port = int(cluster_port.value)
+        pw   = cluster_password.value
+
+        if not host or not user:
+            set_status("fail")
+            with log_out:
+                print("[auth][ERROR] Provide Host + User first.")
+            return
+        if not pw:
+            set_status("fail")
+            with log_out:
+                print("[auth][ERROR] Enter your password (used once; not stored).")
+            return
+
+        try:
+            # 1) ensure local keypair exists
+            priv, pub = ensure_local_ssh_key(log_out, key_type="ed25519")
+            pubkey_text = pub.read_text(encoding="utf-8").strip()
+
+            with log_out:
+                print("[auth] Installing public key to remote authorized_keys…")
+
+            # 2) install pubkey using password auth
+            remote_install_pubkey_with_password(
+                host=host, user=user, port=port,
+                password=pw, pubkey_text=pubkey_text,
+                log_out=log_out
+            )
+
+            # 3) verify system ssh works (BatchMode)
+            with log_out:
+                print("[auth] Verifying non-interactive SSH…")
+            r = ssh_run(host, user, port, "hostname && whoami && date", timeout=15)
+
+            if r.returncode == 0:
+                set_status("done")
+                with log_out:
+                    print("[auth] ✅ Passwordless SSH is working. You can switch back to Key-only.")
+                # Optional: flip auth mode back
+                auth_mode.value = "key"
+                cluster_password.value = ""
+            else:
+                set_status("fail")
+                with log_out:
+                    print("[auth][ERROR] Key install ran, but BatchMode SSH still failed.")
+                    print("stdout:", (r.stdout or "").strip())
+                    print("stderr:", (r.stderr or "").strip())
+                    print("hint :", explain_ssh_failure_hint(r.stderr or ""))
+
+        except Exception as e:
+            set_status("fail")
+            with log_out:
+                print("[auth][ERROR]", type(e).__name__, e)
+
     def rsh(host, user, port, cmd, timeout=60):
         """SSH run with a timeout and returned stdout/stderr."""
         r = ssh_run(host, user, port, cmd, timeout=timeout)
@@ -1409,6 +1617,12 @@ def build_icesee_ui():
                 print("  name  :", spack_name)
 
             spack_path, (rc, out, err) = remote_ensure_spack(host, user, port, spack_parent, spack_name, repo)
+            # after spack_path is set (like "~/r-arobel3-0/ICESEE-Spack")
+            rcp, outp, errp = rsh(host, user, port, f"python3 - <<'PY'\nimport os\nprint(os.path.abspath(os.path.expanduser({spack_path!r})))\nPY", timeout=20)
+            spack_path_abs = (outp or "").strip()
+            if not spack_path_abs:
+                raise RuntimeError("Could not resolve remote absolute spack path.")
+            spack_path = spack_path_abs
             with log_out:
                 if out.strip(): print(out.strip())
                 if err.strip(): print(err.strip())
@@ -1633,12 +1847,39 @@ def build_icesee_ui():
             r = ssh_run(host, user, port, "hostname && whoami && date", timeout=15)
             with log_out:
                 print("returncode:", r.returncode)
+
                 if r.stdout.strip():
                     print("--- stdout ---")
                     print(r.stdout.strip())
+
                 if r.stderr.strip():
                     print("--- stderr ---")
                     print(r.stderr.strip())
+
+                if r.returncode != 0:
+                    err = (r.stderr or "").lower()
+
+                    if "permission denied" in err:
+                        print()
+                        print("⚠ SSH authentication failed.")
+                        print("Looks like passwordless SSH is not configured.")
+                        print()
+                        print("➡ Fix:")
+                        print("   1) Switch Auth → 'Bootstrap with password'")
+                        print("   2) Enter your cluster password")
+                        print("   3) Click 'Enable passwordless SSH'")
+                        print()
+                        print("After that the UI will connect automatically.")
+
+                    elif "timed out" in err or "connection timed out" in err:
+                        print()
+                        print("⚠ Connection timed out.")
+                        print("Check VPN, firewall, or hostname.")
+
+                    elif "could not resolve hostname" in err:
+                        print()
+                        print("⚠ Hostname not reachable.")
+                        print("Check the cluster hostname.")
 
             set_status("done" if r.returncode == 0 else "fail")
 
@@ -1677,23 +1918,83 @@ def build_icesee_ui():
 
         try:
             r = ssh_run(host, user, port, f"squeue -j {jobid} -o '%i %T %M %D %R'", timeout=15)
+
             with log_out:
-                print("returncode:", r.returncode)
                 if r.stdout.strip():
                     print("--- squeue ---")
                     print(r.stdout.strip())
-                else:
-                    print("(no output; job may have finished or is not visible)")
-                if r.stderr.strip():
-                    print("--- stderr ---")
-                    print(r.stderr.strip())
+                    set_status("done" if r.returncode == 0 else "fail")
+                    return
 
-            set_status("done" if r.returncode == 0 else "fail")
+            # If squeue is empty, ask sacct (history)
+            r2 = ssh_run(
+                host, user, port,
+                f"sacct -j {jobid} --format=JobID,JobName%20,Partition,Account,State,ExitCode,Elapsed -X",
+                timeout=15
+            )
+            with log_out:
+                print("(squeue empty; job likely finished or left the queue)")
+                print("--- sacct ---")
+                print((r2.stdout or "").strip() or "(no sacct output)")
+                if r2.stderr.strip():
+                    print("--- stderr ---")
+                    print(r2.stderr.strip())
+
+            set_status("done" if r2.returncode == 0 else "fail")
 
         except subprocess.TimeoutExpired:
             set_status("fail")
             with log_out:
                 print("[remote][TIMEOUT] Status check timed out.")
+        except Exception as e:
+            set_status("fail")
+            with log_out:
+                print("[remote][ERROR]", type(e).__name__, e)
+
+    def run_example_remote_cancel():
+        log_out.clear_output()
+        set_status("running")
+
+        host = cluster_host.value.strip()
+        user = cluster_user.value.strip()
+        port = int(cluster_port.value)
+
+        jobid = STATUS.get("jobid")
+
+        with log_out:
+            print("[remote] Cancel job")
+            print("  host:", host)
+            print("  user:", user)
+            print("  jobid:", jobid)
+            print("-" * 70)
+
+        if not jobid:
+            set_status("fail")
+            with log_out:
+                print("[remote][ERROR] No JobID found.")
+            return
+
+        try:
+            r = ssh_run(host, user, port, f"scancel {jobid}", timeout=15)
+
+            with log_out:
+                print("returncode:", r.returncode)
+
+                if r.stdout.strip():
+                    print("--- stdout ---")
+                    print(r.stdout.strip())
+
+                if r.stderr.strip():
+                    print("--- stderr ---")
+                    print(r.stderr.strip())
+
+            if r.returncode == 0:
+                with log_out:
+                    print(f"✅ Job {jobid} cancelled.")
+                set_status("done")
+            else:
+                set_status("fail")
+
         except Exception as e:
             set_status("fail")
             with log_out:
@@ -1846,6 +2147,7 @@ def build_icesee_ui():
     submit_btn.on_click(lambda b: run_example_remote_submit())
     status_btn.on_click(lambda b: run_example_remote_status())
     tail_btn.on_click(lambda b: run_example_remote_tail())
+    terminate_btn.on_click(lambda b: run_example_remote_cancel())
 
     cloud_submit_btn.on_click(lambda b: run_example_cloud_submit())
     cloud_status_btn.on_click(lambda b: run_example_cloud_status())
@@ -1858,6 +2160,8 @@ def build_icesee_ui():
     filter_alg_dd.observe(_sync_knobs, names="value")
     ens_sl.observe(_sync_knobs, names="value")
     seed_in.observe(_sync_knobs, names="value")
+
+    bootstrap_btn.on_click(on_bootstrap_keys)
 
    # =========================================================
     # UX CSS
@@ -1939,7 +2243,7 @@ def build_icesee_ui():
             W.HBox([W.HTML("<div class='icesee-lbl'>PMIX_DIR:</div>"),  spack_pmix_dir],  layout=W.Layout(gap="12px")),
             W.Box([spack_use_existing_sbatch], layout=W.Layout(margin="0 0 0 120px")),
             # W.HBox([connect_btn, submit_btn, status_btn, tail_btn], layout=W.Layout(gap="10px")),
-            W.HBox([connect_btn, status_btn, tail_btn], layout=W.Layout(gap="10px")),
+            W.HBox([connect_btn, status_btn, tail_btn, terminate_btn], layout=W.Layout(gap="10px")),
             W.HTML("<div class='icesee-subtle' style='margin-top:8px'>Slurm resources</div>"),
             W.HBox(
                 [W.HTML("<div class='icesee-lbl'>Job:</div>"), slurm_job_name, W.HTML("<div class='icesee-lbl'>Time:</div>"), slurm_time],
@@ -1972,6 +2276,10 @@ def build_icesee_ui():
             remote_module_lines,
             W.HTML("<div class='icesee-subtle' style='margin-top:10px'>Exports</div>"),
             remote_export_lines,
+            W.HTML("<div class='icesee-subtle' style='margin-top:10px'>Auth</div>"),
+            W.HBox([W.HTML("<div class='icesee-lbl'>Method:</div>"), auth_mode], layout=W.Layout(gap="12px")),
+            W.Box([cluster_password], layout=W.Layout(margin="0 0 0 120px")),
+            W.Box([bootstrap_btn], layout=W.Layout(margin="0 0 0 120px")),
         ],
         layout=W.Layout(gap="8px"),
     )
@@ -2014,6 +2322,7 @@ def build_icesee_ui():
         submit_btn.disabled = not is_remote
         status_btn.disabled = not is_remote
         tail_btn.disabled = not is_remote
+        terminate_btn.disabled = not is_remote
 
         is_cloud = (mode == MODE_CLOUD)
         cloud_submit_btn.disabled = not is_cloud
