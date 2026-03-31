@@ -10,7 +10,7 @@ It is intentionally minimal: one runnable tutorial, a few key concepts, and clea
 The recommended entry point is the Lorenz-96 tutorial notebook, which demonstrates a full
 forecast → analysis data assimilation cycle in a lightweight setting.
 
-```{button-link} icesee_jupyter_notebooks/run_lorenz96_da
+```{button-link} icesee_jupyter_notebooks/run_lorenz96_da.html
 :color: success
 :expand:
 Run the Lorenz-96 Tutorial
@@ -37,13 +37,13 @@ by a flowline solver or a full ice-sheet model.
 
 After completing Lorenz-96, continue with:
 
-```{button-link} icesee_workflow
+```{button-link} icesee_workflow.html
 :color: primary
 :expand:
 ICESEE Workflow Overview
 ```
 
-```{button-link} user_manual
+```{button-link} user_manual.html
 :color: info
 :expand:
 GHUB User Manual
@@ -56,13 +56,13 @@ GHUB User Manual
 ICESEE is designed to scale from idealized systems to ice-sheet simulations.
 For advanced execution environments:
 
-```{button-link} running_with_containers
+```{button-link} running_with_containers.html
 :color: secondary
 :expand:
 Running with Containers
 ```
 
-```{button-link} icesee_hpc_coupling
+```{button-link} icesee_hpc_coupling.html
 :color: secondary
 :expand:
 ICESEE-HPC Coupling

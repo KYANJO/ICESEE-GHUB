@@ -48,13 +48,13 @@ Container and deployment notes are maintained in the ICESEE Wiki:
 
 ---
 
-```{button-link} user_manual
+```{button-link} user_manual.html
 :color: secondary
 :expand:
 Back to User Manual
 ```
 
-```{button-link} index
+```{button-link} index.html
 :color: secondary
 :expand:
 Back to Home

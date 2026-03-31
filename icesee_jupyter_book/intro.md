@@ -14,7 +14,7 @@ This GHUB tool packages ICESEE into an interactive **Jupyter Book** format, so u
 
 GHUB-specific guidance: what runs here, how the book is built, and what to expect.
 
-```{button-link} user_manual
+```{button-link} user_manual.html
 :color: info
 :expand:
 Open User Manual
@@ -26,7 +26,7 @@ Open User Manual
 
 A minimal, self-contained end-to-end data assimilation cycle (runnable in GHUB).
 
-```{button-link} icesee_jupyter_notebooks/run_lorenz96_da
+```{button-link} icesee_jupyter_notebooks/run_lorenz96_da.html
 :color: success
 :expand:
 Open Lorenz-96 Notebook
