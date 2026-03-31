@@ -20,7 +20,7 @@ ICESEE is an open-source framework for **ice-sheet state estimation** and **para
 
 Start here for the big-picture workflow and core concepts behind ensemble-based state estimation.
 
-```{button-link} intro
+```{button-link} intro.html
 :color: primary
 :expand:
 Read the Introduction
@@ -32,7 +32,7 @@ Read the Introduction
 
 Run the end-to-end Lorenz-96 data assimilation demo (fully runnable in GHUB).
 
-```{button-link} icesee_jupyter_notebooks/run_lorenz96_da
+```{button-link} icesee_jupyter_notebooks/run_lorenz96_da.html
 :color: success
 :expand:
 Open the Lorenz-96 Notebook
@@ -54,7 +54,7 @@ It provides:
 - A guided path from **idealized systems → ice-sheet applications**  
 - A stable wrapper around the upstream ICESEE repository  
 
-```{button-link} user_manual
+```{button-link} user_manual.html
 :color: info
 :expand:
 Read the GHUB User Manual
@@ -109,7 +109,7 @@ Open
 
 ---
 
-<!-- ```{button-link} icesee_jupyter_notebooks/run_lorenz96_da.ipynb
+<!-- ```{button-link} icesee_jupyter_notebooks/run_lorenz96_da.html
 :color: success
 :expand:
 Start the Lorenz-96 Notebook
