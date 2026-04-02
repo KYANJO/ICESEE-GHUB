@@ -13,6 +13,235 @@ import subprocess
 from pathlib import Path
 import urllib.request
 import urllib.error
+from dataclasses import dataclass
+
+@dataclass
+class RemoteSubmitResult:
+    success: bool
+    jobid: str | None
+    remote_dir: str
+    remote_example_dir: str | None
+    spack_path: str | None
+    used_existing_sbatch: bool
+    existing_sbatch_name: str | None
+    messages: list[str]
+
+def resolve_remote_abs_path(host: str, user: str, port: int, remote_path: str) -> str:
+    rc, out, err = rsh(
+        host,
+        user,
+        port,
+        f"python3 - <<'PY'\nimport os\nprint(os.path.abspath(os.path.expanduser({remote_path!r})))\nPY",
+        timeout=20,
+    )
+    resolved = (out or "").strip()
+    if rc != 0 or not resolved:
+        raise RuntimeError(f"Could not resolve remote absolute path: {remote_path}\n{err or out}")
+    return resolved
+
+def submit_remote_example(
+    *,
+    host: str,
+    user: str,
+    port: int,
+    example_cfg: dict,
+    params_text: str,
+    remote_base_dir: str,
+    remote_tag: str,
+    spack_enable: bool,
+    spack_repo_url: str,
+    spack_dirname: str,
+    spack_install_if_needed: bool,
+    spack_install_mode: str,
+    spack_slurm_dir: str,
+    spack_pmix_dir: str,
+    spack_use_existing_sbatch: bool,
+    slurm_time: str,
+    slurm_job_name: str,
+    slurm_nodes: int,
+    slurm_ntasks: int,
+    slurm_tpn: int,
+    slurm_part: str,
+    slurm_mem: str,
+    slurm_account: str,
+    slurm_mail: str,
+    remote_module_lines: str,
+    remote_export_lines: str,
+    cluster_mpi_np: int,
+    ens_size: int,
+    cluster_model_nprocs: int,
+) -> RemoteSubmitResult:
+    messages: list[str] = []
+
+    if not host or not user:
+        raise ValueError("Provide Host + User first.")
+
+    rdir = make_remote_run_dir(
+        remote_base_dir.strip() or "~/r-arobel3-0",
+        remote_tag.strip() or "icesee",
+    )
+    messages.append(f"[remote] Remote run dir: {rdir}")
+
+    spack_path = None
+    if spack_enable:
+        spack_parent = remote_base_dir.strip() or "~/r-arobel3-0"
+        spack_name = spack_dirname.strip() or "ICESEE-Spack"
+        repo = spack_repo_url.strip()
+
+        messages.append("[remote] Spack enabled")
+        messages.append(f"  parent: {spack_parent}")
+        messages.append(f"  repo  : {repo}")
+        messages.append(f"  name  : {spack_name}")
+
+        spack_path, (rc, out, err) = remote_ensure_spack(
+            host, user, port, spack_parent, spack_name, repo
+        )
+        if out.strip():
+            messages.append(out.strip())
+        if err.strip():
+            messages.append(err.strip())
+        if rc != 0:
+            raise RuntimeError("Failed to ensure ICESEE-Spack on remote host.")
+
+        spack_path = resolve_remote_abs_path(host, user, port, spack_path)
+        messages.append(f"[remote] Resolved ICESEE-Spack path: {spack_path}")
+
+        if spack_install_if_needed:
+            install_flag = spack_install_mode or ""
+            messages.append(f"[remote] Spack install requested: {install_flag or '(default)'}")
+            rc, out, err = remote_maybe_install_spack(
+                host, user, port, spack_path, install_flag, spack_slurm_dir, spack_pmix_dir
+            )
+            if out.strip():
+                messages.append(out.strip())
+            if err.strip():
+                messages.append(err.strip())
+            if rc != 0:
+                raise RuntimeError("Remote ICESEE-Spack install failed.")
+    else:
+        raise RuntimeError("Remote currently requires ICESEE-Spack enabled.")
+
+    remote_rel = example_cfg.get("remote_rel")
+    if not remote_rel:
+        raise RuntimeError("This example has no remote_rel configured in EXAMPLES.")
+
+    remote_example_dir = f"{spack_path.rstrip('/')}/{remote_rel.lstrip('/')}"
+    messages.append(f"[remote] Remote example dir : {remote_example_dir}")
+
+    rc, out, err = rsh(
+        host, user, port,
+        f"test -d {sh_quote(remote_example_dir)} && echo OK || echo MISSING",
+        timeout=20,
+    )
+    if "OK" not in (out or ""):
+        raise RuntimeError(
+            f"Remote example directory not found.\nstdout: {(out or '').strip()}\nstderr: {(err or '').strip()}"
+        )
+
+    remote_sbatch = example_cfg.get("remote_sbatch")
+    if spack_use_existing_sbatch and remote_sbatch:
+        chk = f"test -f {sh_quote(remote_example_dir + '/' + remote_sbatch)} && echo OK || echo MISSING"
+        rc2, out2, err2 = rsh(host, user, port, chk, timeout=20)
+
+        if "OK" in (out2 or ""):
+            remote_write_text(host, user, port, f"{rdir}/params.yaml", params_text, timeout=30)
+            rsh(
+                host, user, port,
+                f"cp {sh_quote(rdir+'/params.yaml')} {sh_quote(remote_example_dir+'/params.yaml')}",
+                timeout=20,
+            )
+
+            submit_cmd = f"""
+set -e
+cd {sh_quote(remote_example_dir)}
+source {sh_quote(spack_path)}/scripts/activate.sh
+sbatch {sh_quote(remote_sbatch)}
+"""
+            r = ssh_run(host, user, port, submit_cmd, timeout=30)
+            if r.returncode != 0:
+                raise RuntimeError(r.stderr or r.stdout)
+
+            m = re.search(r"Submitted batch job\s+(\d+)", r.stdout)
+            if not m:
+                raise RuntimeError(f"Could not parse JobID from:\n{r.stdout}\n{r.stderr}")
+
+            jobid = m.group(1)
+            messages.append("[remote] ✅ Submitted existing sbatch from example dir")
+            messages.append(f"  sbatch: {remote_sbatch}")
+            messages.append(f"  jobid : {jobid}")
+
+            return RemoteSubmitResult(
+                success=True,
+                jobid=jobid,
+                remote_dir=remote_example_dir,
+                remote_example_dir=remote_example_dir,
+                spack_path=spack_path,
+                used_existing_sbatch=True,
+                existing_sbatch_name=remote_sbatch,
+                messages=messages,
+            )
+
+        messages.append("[remote] NOTE: remote_sbatch configured but not found; falling back to generated slurm_run.sh.")
+
+    account_line, mail_lines = slurm_optional_lines(slurm_account.strip(), slurm_mail.strip())
+
+    outfile = "icesee-enkf-%j.out"
+    run_script_name = example_cfg.get("run_script")
+
+    slurm_text = render_slurm_script(
+        dict(
+            TIME=slurm_time.strip(),
+            JOB_NAME=slurm_job_name.strip() or "ICESEE",
+            NODES=int(slurm_nodes),
+            NTASKS=int(slurm_ntasks),
+            TPN=int(slurm_tpn),
+            PARTITION=slurm_part.strip(),
+            MEM=slurm_mem.strip(),
+            ACCOUNT_LINE=account_line,
+            MAIL_LINES=mail_lines,
+            OUTFILE=outfile,
+            MODULE_LINES=sanitize_multiline(remote_module_lines),
+            EXPORT_LINES=sanitize_multiline(remote_export_lines),
+            SPACK_PATH=spack_path,
+            NP=int(cluster_mpi_np),
+            NENS=int(ens_size),
+            MODEL_NPROCS=int(cluster_model_nprocs),
+            RUN_SCRIPT=run_script_name,
+            PARAMS_PATH=f"{rdir}/params.yaml",
+            EXAMPLE_DIR=remote_example_dir,
+            SRUN_MPI_FLAG="--mpi=pmix",
+        )
+    )
+
+    if "{{" in slurm_text or "}}" in slurm_text:
+        raise RuntimeError("SLURM_TEMPLATE render left unresolved placeholders. Check keys passed to render_slurm_script().")
+
+    messages.append("[remote] Writing params.yaml + slurm_run.sh, then sbatch…")
+
+    jobid = remote_stage_and_submit(
+        host=host,
+        user=user,
+        port=port,
+        remote_dir=rdir,
+        params_text=params_text,
+        slurm_text=slurm_text,
+    )
+
+    messages.append("[remote] ✅ Submitted generated slurm_run.sh")
+    messages.append(f"  jobid : {jobid}")
+    messages.append(f"  rdir  : {rdir}")
+    messages.append(f"  example dir: {remote_example_dir}")
+
+    return RemoteSubmitResult(
+        success=True,
+        jobid=jobid,
+        remote_dir=rdir,
+        remote_example_dir=remote_example_dir,
+        spack_path=spack_path,
+        used_existing_sbatch=False,
+        existing_sbatch_name=None,
+        messages=messages,
+    )
 
 def sh_quote(s: str) -> str:
     return "'" + s.replace("'", "'\"'\"'") + "'"

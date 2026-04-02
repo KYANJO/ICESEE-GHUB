@@ -2,20 +2,14 @@
 from __future__ import annotations
 
 import os
-import re
-import sys
-import json
 import yaml
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
-from datetime import datetime
 from urllib.parse import urlencode
 import ipywidgets as W
 
 from IPython.display import display, Image
 
-from icesee_jupyter_book.core.paths import REPO, BOOK, EXT
 from icesee_jupyter_book.core.example_registry import EXAMPLES, enabled_names
 from icesee_jupyter_book.core.config_io import load_yaml, dump_yaml
 from icesee_jupyter_book.core.example_discovery import (
@@ -25,33 +19,21 @@ from icesee_jupyter_book.core.example_discovery import (
 )
 from icesee_jupyter_book.core.local_runner import (
     run_dir,
-    force_external_icesee_env,
-    mirror_assets_for_report,
-    ensure_report_h5,
-    run_report_notebook,
     run_local_example,
     LocalRunResult,
 )
 from icesee_jupyter_book.core.remote_runner import (
-    sh_quote,
     ssh_run,
-    http_json,
-    make_remote_run_dir,
-    slurm_optional_lines,
-    sanitize_multiline,
     render_slurm_script,
-    remote_write_text,
-    remote_stage_and_submit,
     ensure_local_ssh_key,
     remote_install_pubkey_with_password,
     explain_ssh_failure_hint,
-    rsh,
-    remote_ensure_spack,
-    remote_maybe_install_spack,
     remote_test_connection,
     remote_job_status,
     remote_tail_log,
     remote_cancel_job,
+    submit_remote_example,
+    RemoteSubmitResult,
 )
 from icesee_jupyter_book.core.cloud_runner import (
     AWSBatchConfig,
@@ -727,233 +709,52 @@ def build_icesee_ui():
             print("  example:", example_dd.value)
             print("-" * 70)
 
-        if not host or not user:
-            set_status("fail")
-            with log_out:
-                print("[remote][ERROR] Provide Host + User first.")
-            return
-
-        example_cfg = EXAMPLES[example_dd.value]
-
-        # Build params locally (text only; we write it remotely via heredoc)
-        sync_quick_into_widgets()
-        cfg_yaml = build_config_from_widgets()
-        params_text = yaml.safe_dump(cfg_yaml, sort_keys=False)
-
-        # Remote run dir
-        rdir = make_remote_run_dir(
-            remote_base_dir.value.strip() or "~/r-arobel3-0",
-            remote_tag.value.strip() or "icesee",
-        )
-
-        # --- ensure ICESEE-Spack ---
-        spack_path = None
-        if spack_enable.value:
-            spack_parent = remote_base_dir.value.strip() or "~/r-arobel3-0"
-            spack_name = spack_dirname.value.strip() or "ICESEE-Spack"
-            repo = spack_repo_url.value.strip()
-
-            with log_out:
-                print("[remote] Spack enabled")
-                print("  parent:", spack_parent)
-                print("  repo  :", repo)
-                print("  name  :", spack_name)
-
-            spack_path, (rc, out, err) = remote_ensure_spack(host, user, port, spack_parent, spack_name, repo)
-            # after spack_path is set (like "~/r-arobel3-0/ICESEE-Spack")
-            rcp, outp, errp = rsh(host, user, port, f"python3 - <<'PY'\nimport os\nprint(os.path.abspath(os.path.expanduser({spack_path!r})))\nPY", timeout=20)
-            spack_path_abs = (outp or "").strip()
-            if not spack_path_abs:
-                raise RuntimeError("Could not resolve remote absolute spack path.")
-            spack_path = spack_path_abs
-            with log_out:
-                if out.strip(): print(out.strip())
-                if err.strip(): print(err.strip())
-            if rc != 0:
-                set_status("fail")
-                return
-
-            if spack_install_if_needed.value:
-                install_flag = spack_install_mode.value or ""
-                with log_out:
-                    print("[remote] Spack install requested:", install_flag or "(default)")
-                rc, out, err = remote_maybe_install_spack(host, user, port, spack_path, install_flag, spack_slurm_dir.value, spack_pmix_dir.value)
-                with log_out:
-                    if out.strip(): print(out.strip())
-                    if err.strip(): print(err.strip())
-                if rc != 0:
-                    set_status("fail")
-                    return
-        else:
-            set_status("fail")
-            with log_out:
-                print("[remote][ERROR] Remote currently requires ICESEE-Spack enabled.")
-            return
-
-        # Remote example dir inside ICESEE-Spack
-        remote_rel = example_cfg.get("remote_rel")
-        if not remote_rel:
-            set_status("fail")
-            with log_out:
-                print("[remote][ERROR] This example has no remote_rel configured in EXAMPLES.")
-            return
-
-        remote_example_dir = f"{spack_path.rstrip('/')}/{remote_rel.lstrip('/')}"
-        with log_out:
-            print("[remote] Remote ICESEE-Spack:", spack_path)
-            print("[remote] Remote example dir :", remote_example_dir)
-
-        # Verify example dir exists remotely
-        rc, out, err = rsh(host, user, port, f"test -d {sh_quote(remote_example_dir)} && echo OK || echo MISSING", timeout=20)
-        if "OK" not in (out or ""):
-            set_status("fail")
-            with log_out:
-                print("[remote][ERROR] Remote example directory not found.")
-                print("stdout:", (out or "").strip())
-                print("stderr:", (err or "").strip())
-            return
-
-        # If repo provides a job script for this example (ISSM), use it
-        remote_sbatch = example_cfg.get("remote_sbatch")
-        if spack_use_existing_sbatch.value and remote_sbatch:
-            # confirm it exists
-            chk = f"test -f {sh_quote(remote_example_dir + '/' + remote_sbatch)} && echo OK || echo MISSING"
-            rc2, out2, err2 = rsh(host, user, port, chk, timeout=20)
-            if "OK" in (out2 or ""):
-                try:
-                    # stage params.yaml in rdir
-                    remote_write_text(host, user, port, f"{rdir}/params.yaml", params_text, timeout=30)
-                    # copy into example dir so the sbatch finds it (simple + robust)
-                    rsh(host, user, port, f"cp {sh_quote(rdir+'/params.yaml')} {sh_quote(remote_example_dir+'/params.yaml')}", timeout=20)
-
-                    submit_cmd = f"""
-    set -e
-    cd {sh_quote(remote_example_dir)}
-    source {sh_quote(spack_path)}/scripts/activate.sh
-    sbatch {sh_quote(remote_sbatch)}
-    """
-                    r = ssh_run(host, user, port, submit_cmd, timeout=30)
-                    if r.returncode != 0:
-                        raise RuntimeError(r.stderr or r.stdout)
-
-                    m = re.search(r"Submitted batch job\s+(\d+)", r.stdout)
-                    if not m:
-                        raise RuntimeError(f"Could not parse JobID from:\n{r.stdout}\n{r.stderr}")
-                    jobid = m.group(1)
-
-                    STATUS["remote_dir"] = remote_example_dir
-                    STATUS["jobid"] = jobid
-
-                    set_status("done")
-                    with log_out:
-                        print("[remote] ✅ Submitted existing sbatch from example dir")
-                        print("  sbatch:", remote_sbatch)
-                        print("  jobid :", jobid)
-                    return
-
-                except Exception as e:
-                    set_status("fail")
-                    with log_out:
-                        print("[remote][ERROR]", type(e).__name__, e)
-                    return
-            else:
-                with log_out:
-                    print("[remote] NOTE: remote_sbatch configured but not found; falling back to generated slurm_run.sh.")
-
-        # Otherwise generate sbatch wrapper that runs python from remote example dir
-        outfile = "icesee-enkf-%j.out"
-
-        run_script_name = example_cfg.get("run_script") or find_run_script(example_cfg).name
-
-        # run_launch = (
-        #     f"cd {sh_quote(remote_example_dir)}\n"
-        #     f"python3 {sh_quote(run_script_name)} "
-        #     f"-F {sh_quote(rdir + '/params.yaml')} "
-        #     f"--Nens={int(ens_sl.value)} --model_nprocs={int(cluster_model_nprocs.value)}"
-        # )
-
-        # slurm_text = render_slurm_script(
-        #     dict(
-        #         TIME=slurm_time.value.strip(),
-        #         JOB_NAME=slurm_job_name.value.strip() or "ICESEE",
-        #         NODES=int(slurm_nodes.value),
-        #         NTASKS=int(slurm_ntasks.value),
-        #         TPN=int(slurm_tpn.value),
-        #         PARTITION=slurm_part.value.strip(),
-        #         MEM=slurm_mem.value.strip(),
-        #         ACCOUNT=(slurm_account.value.strip() or "REPLACE_ME"),
-        #         OUTFILE=outfile,
-        #         MODULE_LINES=remote_module_lines.value.rstrip(),
-        #         EXPORT_LINES=remote_export_lines.value.rstrip(),
-        #         SPACK_PATH=spack_path,
-        #         RUN_DIR=rdir,
-        #         RUN_LAUNCH_LINE=run_launch,
-        #     )
-        # )
-
-        # build sbatch optional lines correctly
-        account_line, mail_lines = slurm_optional_lines(
-            slurm_account.value.strip(),
-            slurm_mail.value.strip(),
-        )
-
-        slurm_text = render_slurm_script(
-            dict(
-                TIME=slurm_time.value.strip(),
-                JOB_NAME=slurm_job_name.value.strip() or "ICESEE",
-                NODES=int(slurm_nodes.value),
-                NTASKS=int(slurm_ntasks.value),
-                TPN=int(slurm_tpn.value),
-                PARTITION=slurm_part.value.strip(),
-                MEM=slurm_mem.value.strip(),
-
-                # ✅ these match the template
-                ACCOUNT_LINE=account_line,
-                MAIL_LINES=mail_lines,
-
-                OUTFILE=outfile,
-                MODULE_LINES=sanitize_multiline(remote_module_lines.value),
-                EXPORT_LINES=sanitize_multiline(remote_export_lines.value),
-
-                SPACK_PATH=spack_path,
-                NP=int(cluster_mpi_np.value),
-                NENS=int(ens_sl.value),
-                MODEL_NPROCS=int(cluster_model_nprocs.value),
-                RUN_SCRIPT=run_script_name,
-                PARAMS_PATH=f"{rdir}/params.yaml",
-                EXAMPLE_DIR=remote_example_dir,
-
-                # add this so the template doesn’t leave {{SRUN_MPI_FLAG}} behind
-                SRUN_MPI_FLAG="--mpi=pmix",
-            )
-        )
-        if "{{" in slurm_text or "}}" in slurm_text:
-            raise RuntimeError("SLURM_TEMPLATE render left unresolved placeholders. Check keys passed to render_slurm_script().")
-
-        with log_out:
-            print("[remote] Remote run dir:", rdir)
-            print("[remote] Writing params.yaml + slurm_run.sh, then sbatch…")
-            print("-" * 70)
-
         try:
-            jobid = remote_stage_and_submit(
+            example_cfg = EXAMPLES[example_dd.value]
+
+            sync_quick_into_widgets()
+            cfg_yaml = build_config_from_widgets()
+            params_text = yaml.safe_dump(cfg_yaml, sort_keys=False)
+
+            result = submit_remote_example(
                 host=host,
                 user=user,
                 port=port,
-                remote_dir=rdir,
+                example_cfg=example_cfg,
                 params_text=params_text,
-                slurm_text=slurm_text,
+                remote_base_dir=remote_base_dir.value,
+                remote_tag=remote_tag.value,
+                spack_enable=spack_enable.value,
+                spack_repo_url=spack_repo_url.value,
+                spack_dirname=spack_dirname.value,
+                spack_install_if_needed=spack_install_if_needed.value,
+                spack_install_mode=spack_install_mode.value,
+                spack_slurm_dir=spack_slurm_dir.value,
+                spack_pmix_dir=spack_pmix_dir.value,
+                spack_use_existing_sbatch=spack_use_existing_sbatch.value,
+                slurm_time=slurm_time.value,
+                slurm_job_name=slurm_job_name.value,
+                slurm_nodes=slurm_nodes.value,
+                slurm_ntasks=slurm_ntasks.value,
+                slurm_tpn=slurm_tpn.value,
+                slurm_part=slurm_part.value,
+                slurm_mem=slurm_mem.value,
+                slurm_account=slurm_account.value,
+                slurm_mail=slurm_mail.value,
+                remote_module_lines=remote_module_lines.value,
+                remote_export_lines=remote_export_lines.value,
+                cluster_mpi_np=cluster_mpi_np.value,
+                ens_size=ens_sl.value,
+                cluster_model_nprocs=cluster_model_nprocs.value,
             )
 
-            STATUS["remote_dir"] = rdir
-            STATUS["jobid"] = jobid
+            STATUS["remote_dir"] = result.remote_dir
+            STATUS["jobid"] = result.jobid
 
             set_status("done")
             with log_out:
-                print("[remote] ✅ Submitted generated slurm_run.sh")
-                print("  jobid :", jobid)
-                print("  rdir  :", rdir)
-                print("  example dir:", remote_example_dir)
+                for msg in result.messages:
+                    print(msg)
 
         except subprocess.TimeoutExpired:
             set_status("fail")
@@ -1516,11 +1317,6 @@ def build_icesee_ui():
     page.add_class("icesee-page")
 
     cloud_submit_btn.layout.display = "none"
-
-    row = W.HBox([left_card, right_card], layout=W.Layout(width="100%", display="flex", gap="26px"))
-    page = W.VBox([header, row, actions_card], layout=W.Layout(width="100%"))
-    # page = W.VBox([header, W.HBox([left_card, right_card], layout=W.Layout(gap="26px")), actions_card])
-    # display(page)
 
     set_status("idle")
     rebuild_for_example()
