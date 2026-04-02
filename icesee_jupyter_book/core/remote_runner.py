@@ -318,3 +318,291 @@ def explain_ssh_failure_hint(stderr: str) -> str:
     if "keyboard-interactive" in s or "authentication" in s:
         return "Interactive auth is being requested. BatchMode blocks it; bootstrap keys or use OnDemand."
     return "SSH failed. Check host/user/VPN and whether passwordless key auth is enabled."
+
+
+def rsh(host, user, port, cmd, timeout=60):
+    """SSH run with a timeout and returned stdout/stderr."""
+    r = ssh_run(host, user, port, cmd, timeout=timeout)
+    return r.returncode, r.stdout, r.stderr
+
+def remote_ensure_spack(host, user, port, remote_parent_dir, spack_name, repo_url):
+    """
+    Ensure ICESEE-Spack is cloned inside remote_parent_dir/spack_name.
+    """
+    spack_path = f"{remote_parent_dir.rstrip('/')}/{spack_name}"
+    cmd = f"""
+set -e
+mkdir -p {sh_quote(remote_parent_dir)}
+if [ ! -d {sh_quote(spack_path)} ]; then
+echo "[spack] cloning {repo_url} -> {spack_path}"
+cd {sh_quote(remote_parent_dir)}
+git clone --recurse-submodules {sh_quote(repo_url)} {sh_quote(spack_name)}
+else
+echo "[spack] exists: {spack_path}"
+fi
+echo "[spack] done"
+"""
+    return spack_path, rsh(host, user, port, cmd, timeout=180)
+
+def remote_maybe_install_spack(host, user, port, spack_path, install_flag, slurm_dir, pmix_dir):
+    """
+    Run scripts/install.sh (idempotent-ish) if user requested.
+    Uses a marker file to avoid re-running.
+    """
+    marker = f"{spack_path}/.icesee_spack_installed"
+    slurm = slurm_dir.strip()
+    pmix  = pmix_dir.strip()
+
+    # Build env prefix only if provided
+    env_prefix = ""
+    if slurm:
+        env_prefix += f"SLURM_DIR={sh_quote(slurm)} "
+    if pmix:
+        env_prefix += f"PMIX_DIR={sh_quote(pmix)} "
+
+    cmd = f"""
+set -e
+cd {sh_quote(spack_path)}
+if [ -f {sh_quote(marker)} ]; then
+echo "[spack] install marker present: {marker}"
+exit 0
+fi
+echo "[spack] running install.sh {install_flag}"
+{env_prefix} ./scripts/install.sh {install_flag}
+touch {sh_quote(marker)}
+echo "[spack] install completed"
+"""
+    return rsh(host, user, port, cmd, timeout=60*60)  # installs can be long
+
+
+def remote_test_connection(host: str, user: str, port: int) -> dict:
+    r = ssh_run(host, user, port, "hostname && whoami && date", timeout=15)
+    return {
+        "returncode": r.returncode,
+        "stdout": r.stdout,
+        "stderr": r.stderr,
+        "ok": (r.returncode == 0),
+    }
+
+
+def remote_job_status(host: str, user: str, port: int, jobid: str) -> dict:
+    r = ssh_run(host, user, port, f"squeue -j {jobid} -o '%i %T %M %D %R'", timeout=15)
+    if r.returncode == 0 and r.stdout.strip():
+        return {
+            "source": "squeue",
+            "returncode": r.returncode,
+            "stdout": r.stdout,
+            "stderr": r.stderr,
+        }
+
+    r2 = ssh_run(
+        host,
+        user,
+        port,
+        f"sacct -j {jobid} --format=JobID,JobName%20,Partition,Account,State,ExitCode,Elapsed -X",
+        timeout=15,
+    )
+    return {
+        "source": "sacct",
+        "returncode": r2.returncode,
+        "stdout": r2.stdout,
+        "stderr": r2.stderr,
+    }
+
+
+def remote_tail_log(host: str, user: str, port: int, remote_dir: str, jobid: str, n: int = 120) -> dict:
+    out_file = f"{remote_dir}/icesee-enkf-{jobid}.out"
+    cmd = f"test -f {sh_quote(out_file)} && tail -n {int(n)} {sh_quote(out_file)} || echo 'log not yet created'"
+    r = ssh_run(host, user, port, cmd, timeout=15)
+    return {
+        "returncode": r.returncode,
+        "stdout": r.stdout,
+        "stderr": r.stderr,
+        "log_file": out_file,
+    }
+
+
+def remote_cancel_job(host: str, user: str, port: int, jobid: str) -> dict:
+    r = ssh_run(host, user, port, f"scancel {jobid}", timeout=15)
+    return {
+        "returncode": r.returncode,
+        "stdout": r.stdout,
+        "stderr": r.stderr,
+        "ok": (r.returncode == 0),
+    }
+
+# def remote_test():
+#     log_out.clear_output()
+#     set_status("running")
+
+#     if remote_backend.value == "ssh":
+#         return run_example_remote_test()
+
+#     with log_out:
+#         print("[remote:https] Testing health endpoint…")
+#         print("base:", https_base.value.strip())
+#     try:
+#         url = _https_url(https_health_path)
+#         code, j, txt = http_json("GET", url, headers=_extra_headers(), timeout=15)
+#         with log_out:
+#             print("GET", url)
+#             print("status:", code)
+#             print("json:", j)
+#             if txt and not j:
+#                 print("text:", txt[:4000])
+#         set_status("done" if 200 <= code < 300 else "fail")
+#     except Exception as e:
+#         set_status("fail")
+#         with log_out:
+#             print("[remote:https][ERROR]", type(e).__name__, e)
+
+# def remote_submit():
+#     log_out.clear_output()
+#     set_status("running")
+
+#     if remote_backend.value == "ssh":
+#         return run_example_remote_submit()
+
+#     # Build job request
+#     example_cfg = EXAMPLES[example_dd.value]
+#     sync_quick_into_widgets()
+#     cfg_yaml = build_config_from_widgets()
+
+#     rd = run_dir()
+#     params_path = rd / "params.yaml"
+#     dump_yaml(cfg_yaml, params_path)
+
+#     # Optional: generate slurm script (still useful for many services)
+#     slurm_text = render_slurm_script(
+#         dict(
+#             TIME=slurm_time.value.strip(),
+#             JOB_NAME=slurm_job_name.value.strip() or "ICESEE",
+#             NODES=int(slurm_nodes.value),
+#             NTASKS=int(slurm_ntasks.value),
+#             TPN=int(slurm_tpn.value),
+#             PARTITION=slurm_part.value.strip(),
+#             MEM=slurm_mem.value.strip(),
+#             ACCOUNT=(slurm_account.value.strip() or ""),
+#             OUTFILE="icesee-enkf-%j.out",
+#             MAIL_USER=(slurm_mail.value.strip() or ""),
+#             MODULE_LINES=remote_module_lines.value.rstrip(),
+#             EXPORT_LINES=remote_export_lines.value.rstrip(),
+#             RUN_LAUNCH_LINE=(
+#                 f"mpirun -np {int(cluster_mpi_np.value)} "
+#                 f"python3 {find_run_script(example_cfg).name} "
+#                 f"-F params.yaml --Nens={int(ens_sl.value)} --model_nprocs={int(cluster_model_nprocs.value)}"
+#             ),
+#         )
+#     )
+#     if "{{" in slurm_text or "}}" in slurm_text:
+#         raise RuntimeError("SLURM_TEMPLATE render left unresolved placeholders. Check keys passed to render_slurm_script().")
+    
+
+#     payload = {
+#         "kind": "icesee-run",
+#         "created_at": datetime.utcnow().isoformat() + "Z",
+#         "example": example_dd.value,
+#         "run_script": find_run_script(example_cfg).name,
+#         "params_yaml": params_path.read_text(encoding="utf-8"),
+#         "slurm_script": slurm_text,  # optional; service may ignore
+#         "metadata": {
+#             "repo": str(REPO),
+#             "tag": remote_tag.value.strip(),
+#         },
+#     }
+
+#     with log_out:
+#         print("[remote:https] Submitting to webhook…")
+#         print("example:", payload["example"])
+#         print("endpoint:", _https_url(https_submit_path))
+#         print("-" * 70)
+
+#     try:
+#         url = _https_url(https_submit_path)
+#         code, j, txt = http_json("POST", url, payload=payload, headers=_extra_headers(), timeout=30)
+#         if not (200 <= code < 300):
+#             raise RuntimeError(f"HTTP {code}: {txt[:2000]}")
+#         run_id = (j or {}).get("run_id") or (j or {}).get("id")
+#         if not run_id:
+#             raise RuntimeError(f"No run_id in response. Response json={j}, text={txt[:2000]}")
+
+#         STATUS["run_id"] = run_id
+#         STATUS["remote_mode"] = "https"
+
+#         set_status("done")
+#         with log_out:
+#             print("[remote:https] ✅ Submitted")
+#             print("run_id:", run_id)
+#             if (j or {}).get("url"):
+#                 print("url  :", (j or {}).get("url"))
+#     except Exception as e:
+#         set_status("fail")
+#         with log_out:
+#             print("[remote:https][ERROR]", type(e).__name__, e)
+
+# def remote_status():
+#     log_out.clear_output()
+#     set_status("running")
+
+#     if remote_backend.value == "ssh":
+#         return run_example_remote_status()
+
+#     run_id = STATUS.get("run_id")
+#     if not run_id:
+#         set_status("fail")
+#         with log_out:
+#             print("[remote:https] No run_id yet. Submit first.")
+#         return
+
+#     try:
+#         url = _https_url(https_status_path, run_id=run_id)
+#         code, j, txt = http_json("GET", url, headers=_extra_headers(), timeout=15)
+#         with log_out:
+#             print("[remote:https] GET", url)
+#             print("status:", code)
+#             if j:
+#                 print(json.dumps(j, indent=2)[:4000])
+#             else:
+#                 print(txt[:4000])
+#         set_status("done" if 200 <= code < 300 else "fail")
+#     except Exception as e:
+#         set_status("fail")
+#         with log_out:
+#             print("[remote:https][ERROR]", type(e).__name__, e)
+
+
+# def remote_tail():
+#     log_out.clear_output()
+#     set_status("running")
+
+#     if remote_backend.value == "ssh":
+#         return run_example_remote_tail()
+
+#     run_id = STATUS.get("run_id")
+#     if not run_id:
+#         set_status("fail")
+#         with log_out:
+#             print("[remote:https] No run_id yet. Submit first.")
+#         return
+
+#     try:
+#         url = _https_url(https_tail_path, run_id=run_id, query={"n": 120})
+#         code, j, txt = http_json("GET", url, headers=_extra_headers(), timeout=15)
+#         with log_out:
+#             print("[remote:https] GET", url)
+#             print("status:", code)
+#             # tail is usually text; show text first
+#             if txt:
+#                 print(txt.rstrip()[:8000])
+#             elif j:
+#                 print(json.dumps(j, indent=2)[:8000])
+#         set_status("done" if 200 <= code < 300 else "fail")
+#     except Exception as e:
+#         set_status("fail")
+#         with log_out:
+#             print("[remote:https][ERROR]", type(e).__name__, e)
+
+# # connect_btn.on_click(lambda b: remote_test())
+# # submit_btn.on_click(lambda b: remote_submit())
+# # status_btn.on_click(lambda b: remote_status())
+# # tail_btn.on_click(lambda b: remote_tail())

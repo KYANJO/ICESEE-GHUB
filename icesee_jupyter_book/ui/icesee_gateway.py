@@ -4,17 +4,12 @@ from __future__ import annotations
 import os
 import re
 import sys
-import time
 import json
 import yaml
-import shutil
-import getpass
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
-import urllib.request
-import urllib.error
 from urllib.parse import urlencode
 import ipywidgets as W
 
@@ -34,10 +29,11 @@ from icesee_jupyter_book.core.local_runner import (
     mirror_assets_for_report,
     ensure_report_h5,
     run_report_notebook,
+    run_local_example,
+    LocalRunResult,
 )
 from icesee_jupyter_book.core.remote_runner import (
     sh_quote,
-    _ssh_base,
     ssh_run,
     http_json,
     make_remote_run_dir,
@@ -49,6 +45,13 @@ from icesee_jupyter_book.core.remote_runner import (
     ensure_local_ssh_key,
     remote_install_pubkey_with_password,
     explain_ssh_failure_hint,
+    rsh,
+    remote_ensure_spack,
+    remote_maybe_install_spack,
+    remote_test_connection,
+    remote_job_status,
+    remote_tail_log,
+    remote_cancel_job,
 )
 from icesee_jupyter_book.core.cloud_runner import (
     AWSBatchConfig,
@@ -578,183 +581,7 @@ def build_icesee_ui():
             except Exception:
                 pass
         return h
-    
-    def remote_test():
-        log_out.clear_output()
-        set_status("running")
-
-        if remote_backend.value == "ssh":
-            return run_example_remote_test()
-
-        with log_out:
-            print("[remote:https] Testing health endpoint…")
-            print("base:", https_base.value.strip())
-        try:
-            url = _https_url(https_health_path)
-            code, j, txt = http_json("GET", url, headers=_extra_headers(), timeout=15)
-            with log_out:
-                print("GET", url)
-                print("status:", code)
-                print("json:", j)
-                if txt and not j:
-                    print("text:", txt[:4000])
-            set_status("done" if 200 <= code < 300 else "fail")
-        except Exception as e:
-            set_status("fail")
-            with log_out:
-                print("[remote:https][ERROR]", type(e).__name__, e)
-
-    def remote_submit():
-        log_out.clear_output()
-        set_status("running")
-
-        if remote_backend.value == "ssh":
-            return run_example_remote_submit()
-
-        # Build job request
-        example_cfg = EXAMPLES[example_dd.value]
-        sync_quick_into_widgets()
-        cfg_yaml = build_config_from_widgets()
-
-        rd = run_dir()
-        params_path = rd / "params.yaml"
-        dump_yaml(cfg_yaml, params_path)
-
-        # Optional: generate slurm script (still useful for many services)
-        slurm_text = render_slurm_script(
-            dict(
-                TIME=slurm_time.value.strip(),
-                JOB_NAME=slurm_job_name.value.strip() or "ICESEE",
-                NODES=int(slurm_nodes.value),
-                NTASKS=int(slurm_ntasks.value),
-                TPN=int(slurm_tpn.value),
-                PARTITION=slurm_part.value.strip(),
-                MEM=slurm_mem.value.strip(),
-                ACCOUNT=(slurm_account.value.strip() or ""),
-                OUTFILE="icesee-enkf-%j.out",
-                MAIL_USER=(slurm_mail.value.strip() or ""),
-                MODULE_LINES=remote_module_lines.value.rstrip(),
-                EXPORT_LINES=remote_export_lines.value.rstrip(),
-                RUN_LAUNCH_LINE=(
-                    f"mpirun -np {int(cluster_mpi_np.value)} "
-                    f"python3 {find_run_script(example_cfg).name} "
-                    f"-F params.yaml --Nens={int(ens_sl.value)} --model_nprocs={int(cluster_model_nprocs.value)}"
-                ),
-            )
-        )
-        if "{{" in slurm_text or "}}" in slurm_text:
-            raise RuntimeError("SLURM_TEMPLATE render left unresolved placeholders. Check keys passed to render_slurm_script().")
-        
-
-        payload = {
-            "kind": "icesee-run",
-            "created_at": datetime.utcnow().isoformat() + "Z",
-            "example": example_dd.value,
-            "run_script": find_run_script(example_cfg).name,
-            "params_yaml": params_path.read_text(encoding="utf-8"),
-            "slurm_script": slurm_text,  # optional; service may ignore
-            "metadata": {
-                "repo": str(REPO),
-                "tag": remote_tag.value.strip(),
-            },
-        }
-
-        with log_out:
-            print("[remote:https] Submitting to webhook…")
-            print("example:", payload["example"])
-            print("endpoint:", _https_url(https_submit_path))
-            print("-" * 70)
-
-        try:
-            url = _https_url(https_submit_path)
-            code, j, txt = http_json("POST", url, payload=payload, headers=_extra_headers(), timeout=30)
-            if not (200 <= code < 300):
-                raise RuntimeError(f"HTTP {code}: {txt[:2000]}")
-            run_id = (j or {}).get("run_id") or (j or {}).get("id")
-            if not run_id:
-                raise RuntimeError(f"No run_id in response. Response json={j}, text={txt[:2000]}")
-
-            STATUS["run_id"] = run_id
-            STATUS["remote_mode"] = "https"
-
-            set_status("done")
-            with log_out:
-                print("[remote:https] ✅ Submitted")
-                print("run_id:", run_id)
-                if (j or {}).get("url"):
-                    print("url  :", (j or {}).get("url"))
-        except Exception as e:
-            set_status("fail")
-            with log_out:
-                print("[remote:https][ERROR]", type(e).__name__, e)
-
-    def remote_status():
-        log_out.clear_output()
-        set_status("running")
-
-        if remote_backend.value == "ssh":
-            return run_example_remote_status()
-
-        run_id = STATUS.get("run_id")
-        if not run_id:
-            set_status("fail")
-            with log_out:
-                print("[remote:https] No run_id yet. Submit first.")
-            return
-
-        try:
-            url = _https_url(https_status_path, run_id=run_id)
-            code, j, txt = http_json("GET", url, headers=_extra_headers(), timeout=15)
-            with log_out:
-                print("[remote:https] GET", url)
-                print("status:", code)
-                if j:
-                    print(json.dumps(j, indent=2)[:4000])
-                else:
-                    print(txt[:4000])
-            set_status("done" if 200 <= code < 300 else "fail")
-        except Exception as e:
-            set_status("fail")
-            with log_out:
-                print("[remote:https][ERROR]", type(e).__name__, e)
-
-    
-    def remote_tail():
-        log_out.clear_output()
-        set_status("running")
-
-        if remote_backend.value == "ssh":
-            return run_example_remote_tail()
-
-        run_id = STATUS.get("run_id")
-        if not run_id:
-            set_status("fail")
-            with log_out:
-                print("[remote:https] No run_id yet. Submit first.")
-            return
-
-        try:
-            url = _https_url(https_tail_path, run_id=run_id, query={"n": 120})
-            code, j, txt = http_json("GET", url, headers=_extra_headers(), timeout=15)
-            with log_out:
-                print("[remote:https] GET", url)
-                print("status:", code)
-                # tail is usually text; show text first
-                if txt:
-                    print(txt.rstrip()[:8000])
-                elif j:
-                    print(json.dumps(j, indent=2)[:8000])
-            set_status("done" if 200 <= code < 300 else "fail")
-        except Exception as e:
-            set_status("fail")
-            with log_out:
-                print("[remote:https][ERROR]", type(e).__name__, e)
-
-    # connect_btn.on_click(lambda b: remote_test())
-    # submit_btn.on_click(lambda b: remote_submit())
-    # status_btn.on_click(lambda b: remote_status())
-    # tail_btn.on_click(lambda b: remote_tail())
-
+ 
     def on_bootstrap_keys(_=None):
         log_out.clear_output()
         set_status("running")
@@ -814,60 +641,6 @@ def build_icesee_ui():
             with log_out:
                 print("[auth][ERROR]", type(e).__name__, e)
 
-    def rsh(host, user, port, cmd, timeout=60):
-        """SSH run with a timeout and returned stdout/stderr."""
-        r = ssh_run(host, user, port, cmd, timeout=timeout)
-        return r.returncode, r.stdout, r.stderr
-
-    def remote_ensure_spack(host, user, port, remote_parent_dir, spack_name, repo_url):
-        """
-        Ensure ICESEE-Spack is cloned inside remote_parent_dir/spack_name.
-        """
-        spack_path = f"{remote_parent_dir.rstrip('/')}/{spack_name}"
-        cmd = f"""
-    set -e
-    mkdir -p {sh_quote(remote_parent_dir)}
-    if [ ! -d {sh_quote(spack_path)} ]; then
-    echo "[spack] cloning {repo_url} -> {spack_path}"
-    cd {sh_quote(remote_parent_dir)}
-    git clone --recurse-submodules {sh_quote(repo_url)} {sh_quote(spack_name)}
-    else
-    echo "[spack] exists: {spack_path}"
-    fi
-    echo "[spack] done"
-    """
-        return spack_path, rsh(host, user, port, cmd, timeout=180)
-
-    def remote_maybe_install_spack(host, user, port, spack_path, install_flag, slurm_dir, pmix_dir):
-        """
-        Run scripts/install.sh (idempotent-ish) if user requested.
-        Uses a marker file to avoid re-running.
-        """
-        marker = f"{spack_path}/.icesee_spack_installed"
-        slurm = slurm_dir.strip()
-        pmix  = pmix_dir.strip()
-
-        # Build env prefix only if provided
-        env_prefix = ""
-        if slurm:
-            env_prefix += f"SLURM_DIR={sh_quote(slurm)} "
-        if pmix:
-            env_prefix += f"PMIX_DIR={sh_quote(pmix)} "
-
-        cmd = f"""
-    set -e
-    cd {sh_quote(spack_path)}
-    if [ -f {sh_quote(marker)} ]; then
-    echo "[spack] install marker present: {marker}"
-    exit 0
-    fi
-    echo "[spack] running install.sh {install_flag}"
-    {env_prefix} ./scripts/install.sh {install_flag}
-    touch {sh_quote(marker)}
-    echo "[spack] install completed"
-    """
-        return rsh(host, user, port, cmd, timeout=60*60)  # installs can be long
-
     # =========================================================
     # Cloud panel widgets (AWS Batch)
     # =========================================================
@@ -892,75 +665,51 @@ def build_icesee_ui():
         sync_quick_into_widgets()
         cfg = build_config_from_widgets()
 
-        rd = run_dir()
-        dump_yaml(cfg, rd / "params.yaml")
-
-        env, external_dir = force_external_icesee_env()
-        cmd = [sys.executable, str(RUN_SCRIPT), "-F", str(rd / "params.yaml")]
-
         set_status("running")
         log_out.clear_output()
-        with log_out:
-            print("[local] Example :", example_dd.value)
-            print("[local] Runner  :", RUN_SCRIPT)
-            print("[local] Report  :", REPORT_NB if REPORT_NB else "(none)")
-            print("[local] CWD     :", rd)
-            print("[local] Command :", " ".join(cmd))
-            print("[local] PYTHONPATH(prepended):", external_dir)
-            print("-" * 70)
 
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(rd),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            env=env,
-        )
+        try:
+            result = run_local_example(
+                example_cfg=example_cfg,
+                config=cfg,
+                output_label=output_label_dd.value,
+                generate_report=gen_report.value,
+            )
 
-        assert proc.stdout is not None
-        full_log = []
-        for line in proc.stdout:
-            full_log.append(line)
             with log_out:
-                print(line.rstrip())
-        rc = proc.wait()
+                print("[local] Example :", example_dd.value)
+                print("[local] Runner  :", RUN_SCRIPT)
+                print("[local] Report  :", REPORT_NB if REPORT_NB else "(none)")
+                print("[local] CWD     :", result.run_dir)
+                print("[local] Command :", " ".join(result.command))
+                print("[local] PYTHONPATH(prepended):", result.external_dir)
+                print("-" * 70)
 
-        log_text = "".join(full_log)
-        looks_like_failure = ("Traceback (most recent call last)" in log_text) or ("Error in serial run mode" in log_text)
+                for line in result.log_lines:
+                    print(line)
 
-        with log_out:
-            print("-" * 70)
-            print("Return code:", rc)
+                print("-" * 70)
+                print("Return code:", result.returncode)
 
-        if rc != 0 or looks_like_failure:
-            set_status("fail")
-            refresh_results_preview(rd, results_out)
-            return
-
-        if gen_report.value:
-            try:
-                with log_out:
-                    print("[local] Running report notebook…")
-                # Make sure report sees the expected file name
-                ensure_report_h5(rd, example_cfg, output_label_dd.value)
-                run_report_notebook(REPORT_NB, example_cfg, rd)
-                with log_out:
+                if result.report_notebook is not None:
                     print("[local] Report done.")
-            except Exception as e:
-                with log_out:
-                    print("[local] Report failed:", type(e).__name__, e)
+
+            if not result.success:
                 set_status("fail")
-                refresh_results_preview(rd, results_out)
+                refresh_results_preview(result.run_dir, results_out)
                 return
 
-        set_status("done")
-        refresh_results_preview(rd, results_out)
+            set_status("done")
+            refresh_results_preview(result.run_dir, results_out)
 
-        if open_latest.value:
+            if open_latest.value:
+                with log_out:
+                    print("\nRun folder:", result.run_dir)
+
+        except Exception as e:
+            set_status("fail")
             with log_out:
-                print("\nRun folder:", rd)
+                print("[local][ERROR]", type(e).__name__, e)
 
     def run_example_remote_submit():
         log_out.clear_output()
@@ -1238,20 +987,21 @@ def build_icesee_ui():
             return
 
         try:
-            r = ssh_run(host, user, port, "hostname && whoami && date", timeout=15)
+            result = remote_test_connection(host, user, port)
+
             with log_out:
-                print("returncode:", r.returncode)
+                print("returncode:", result["returncode"])
 
-                if r.stdout.strip():
+                if (result["stdout"] or "").strip():
                     print("--- stdout ---")
-                    print(r.stdout.strip())
+                    print(result["stdout"].strip())
 
-                if r.stderr.strip():
+                if (result["stderr"] or "").strip():
                     print("--- stderr ---")
-                    print(r.stderr.strip())
+                    print(result["stderr"].strip())
 
-                if r.returncode != 0:
-                    err = (r.stderr or "").lower()
+                if result["returncode"] != 0:
+                    err = (result["stderr"] or "").lower()
 
                     if "permission denied" in err:
                         print()
@@ -1275,7 +1025,7 @@ def build_icesee_ui():
                         print("⚠ Hostname not reachable.")
                         print("Check the cluster hostname.")
 
-            set_status("done" if r.returncode == 0 else "fail")
+            set_status("done" if result["ok"] else "fail")
 
         except subprocess.TimeoutExpired:
             set_status("fail")
@@ -1311,30 +1061,21 @@ def build_icesee_ui():
             return
 
         try:
-            r = ssh_run(host, user, port, f"squeue -j {jobid} -o '%i %T %M %D %R'", timeout=15)
+            result = remote_job_status(host, user, port, jobid)
 
             with log_out:
-                if r.stdout.strip():
+                if result["source"] == "squeue":
                     print("--- squeue ---")
-                    print(r.stdout.strip())
-                    set_status("done" if r.returncode == 0 else "fail")
-                    return
+                    print((result["stdout"] or "").strip())
+                else:
+                    print("(squeue empty; job likely finished or left the queue)")
+                    print("--- sacct ---")
+                    print((result["stdout"] or "").strip() or "(no sacct output)")
+                    if (result["stderr"] or "").strip():
+                        print("--- stderr ---")
+                        print(result["stderr"].strip())
 
-            # If squeue is empty, ask sacct (history)
-            r2 = ssh_run(
-                host, user, port,
-                f"sacct -j {jobid} --format=JobID,JobName%20,Partition,Account,State,ExitCode,Elapsed -X",
-                timeout=15
-            )
-            with log_out:
-                print("(squeue empty; job likely finished or left the queue)")
-                print("--- sacct ---")
-                print((r2.stdout or "").strip() or "(no sacct output)")
-                if r2.stderr.strip():
-                    print("--- stderr ---")
-                    print(r2.stderr.strip())
-
-            set_status("done" if r2.returncode == 0 else "fail")
+            set_status("done" if result["returncode"] == 0 else "fail")
 
         except subprocess.TimeoutExpired:
             set_status("fail")
@@ -1369,25 +1110,23 @@ def build_icesee_ui():
             return
 
         try:
-            r = ssh_run(host, user, port, f"scancel {jobid}", timeout=15)
+            result = remote_cancel_job(host, user, port, jobid)
 
             with log_out:
-                print("returncode:", r.returncode)
+                print("returncode:", result["returncode"])
 
-                if r.stdout.strip():
+                if (result["stdout"] or "").strip():
                     print("--- stdout ---")
-                    print(r.stdout.strip())
+                    print(result["stdout"].strip())
 
-                if r.stderr.strip():
+                if (result["stderr"] or "").strip():
                     print("--- stderr ---")
-                    print(r.stderr.strip())
+                    print(result["stderr"].strip())
 
-            if r.returncode == 0:
-                with log_out:
+                if result["ok"]:
                     print(f"✅ Job {jobid} cancelled.")
-                set_status("done")
-            else:
-                set_status("fail")
+
+            set_status("done" if result["ok"] else "fail")
 
         except Exception as e:
             set_status("fail")
@@ -1419,20 +1158,18 @@ def build_icesee_ui():
                 print("[remote][ERROR] No remote dir / JobID. Submit first.")
             return
 
-        out_file = f"{rdir}/icesee-enkf-{jobid}.out"
-        cmd = f"test -f {sh_quote(out_file)} && tail -n 120 {sh_quote(out_file)} || echo 'log not yet created'"
-
         try:
-            r = ssh_run(host, user, port, cmd, timeout=15)
-            with log_out:
-                print("[remote] file:", out_file)
-                print("--- tail ---")
-                print((r.stdout or "").rstrip())
-                if r.stderr.strip():
-                    print("--- stderr ---")
-                    print(r.stderr.strip())
+            result = remote_tail_log(host, user, port, rdir, jobid, n=120)
 
-            set_status("done" if r.returncode == 0 else "fail")
+            with log_out:
+                print("[remote] file:", result["log_file"])
+                print("--- tail ---")
+                print((result["stdout"] or "").rstrip())
+                if (result["stderr"] or "").strip():
+                    print("--- stderr ---")
+                    print(result["stderr"].strip())
+
+            set_status("done" if result["returncode"] == 0 else "fail")
 
         except subprocess.TimeoutExpired:
             set_status("fail")
@@ -1708,6 +1445,7 @@ def build_icesee_ui():
 
     def _toggle_panels_from_tabs(_=None):
         mode = get_mode()
+
         cluster_panel.layout.display = "block" if mode == MODE_REMOTE else "none"
         cloud_panel.layout.display = "block" if mode == MODE_CLOUD else "none"
 
@@ -1723,17 +1461,10 @@ def build_icesee_ui():
         cloud_status_btn.disabled = not is_cloud
         cloud_logs_btn.disabled = not is_cloud
 
-    # mode_tabs.observe(_toggle_panels_from_tabs, names="selected_index")
-    # _toggle_panels_from_tabs()
-    def _toggle_panels_from_tabs(_=None):
-        mode = get_mode()
-        # (keep your existing enable/disable logic here)
-
         update_action_button()
 
     mode_tabs.observe(_toggle_panels_from_tabs, names="selected_index")
     _toggle_panels_from_tabs()
-    update_action_button()
 
     left = W.VBox(
         [
