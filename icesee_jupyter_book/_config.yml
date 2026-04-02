@@ -12,7 +12,7 @@ only_build_toc_files : true
 # execution settings ------------------
 execute: # Options for to control execution and caching
   execute_notebooks : 'force'
-  timeout           : 120 # seconds
+  timeout           : 180 # seconds
   allow_errors      : false
 
   stdeerr_output    : show
