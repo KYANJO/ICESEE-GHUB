@@ -37,9 +37,8 @@ from icesee_jupyter_book.core.remote_runner import (
 )
 from icesee_jupyter_book.core.cloud_runner import (
     AWSBatchConfig,
-    aws_test,
-    aws_batch_submit,
     aws_batch_status,
+    submit_cloud_example,
 )
 
 
@@ -152,8 +151,21 @@ def build_icesee_ui():
     
 
     status_chip = W.HTML("<span class='icesee-status icesee-idle'>Idle</span>")
-    log_out = W.Output(layout=W.Layout(border="1px solid rgba(0,0,0,.12)", padding="10px", height="220px", overflow="auto"))
-    results_out = W.Output(layout=W.Layout(border="1px solid rgba(0,0,0,.12)", padding="10px", height="260px", overflow="auto"))
+    log_out = W.Output(layout=W.Layout(
+        border="1px solid rgba(0,0,0,.12)",
+        padding="10px",
+        height="260px",
+        overflow="auto",
+        width="100%"
+    ))
+
+    results_out = W.Output(layout=W.Layout(
+        border="1px solid rgba(0,0,0,.12)",
+        padding="10px",
+        height="420px",
+        overflow="auto",
+        width="100%"
+    ))
 
     # -----------------------------
     # Mode Tabs
@@ -987,41 +999,35 @@ def build_icesee_ui():
         sync_quick_into_widgets()
         cfg_yaml = build_config_from_widgets()
 
-        rd = run_dir()
-        dump_yaml(cfg_yaml, rd / "params.yaml")
-
-        cfg = AWSBatchConfig(
-            region=aws_region.value.strip() or "us-east-1",
-            profile=(aws_profile.value.strip() or None),
-            s3_prefix=cloud_bucket.value.strip(),
-            job_queue=batch_job_queue.value.strip(),
-            job_definition=batch_job_def.value.strip(),
-            job_name=(batch_job_name.value.strip() or "icesee"),
-        )
-
         set_status("running")
         log_out.clear_output()
         with log_out:
             print("[cloud] AWS Batch submit")
-            print("region :", cfg.region)
-            print("profile:", cfg.profile or "(default)")
-            print("s3     :", cfg.s3_prefix)
+            print("example:", example_dd.value)
+            print("region :", aws_region.value.strip() or "us-east-1")
+            print("profile:", aws_profile.value.strip() or "(default)")
+            print("s3     :", cloud_bucket.value.strip())
 
         try:
-            aws_test(cfg)
-            resp = aws_batch_submit(cfg, rd, example_dd.value, find_run_script(example_cfg).name)
+            result = submit_cloud_example(
+                example_name=example_dd.value,
+                example_cfg=example_cfg,
+                config=cfg_yaml,
+                region=aws_region.value.strip() or "us-east-1",
+                profile=(aws_profile.value.strip() or None),
+                s3_prefix=cloud_bucket.value.strip(),
+                job_queue=batch_job_queue.value.strip(),
+                job_definition=batch_job_def.value.strip(),
+                job_name=(batch_job_name.value.strip() or "icesee"),
+            )
 
-            STATUS["batch_job_id"] = resp["batch_job_id"]
-            STATUS["s3_run"] = resp["s3_run"]
+            STATUS["batch_job_id"] = result.batch_job_id
+            STATUS["s3_run"] = result.s3_run
 
             set_status("done")
             with log_out:
-                print("[cloud] Submitted.")
-                print("batch_job_id:", resp["batch_job_id"])
-                print("s3_run      :", resp["s3_run"])
-                print("\n[batch image requirement]")
-                print("Your AWS Batch container must read ICESEE_S3_RUN and ICESEE_RUN_SCRIPT,")
-                print("download params.yaml from S3, run, then sync results back to S3.")
+                for msg in result.messages:
+                    print(msg)
 
         except Exception as e:
             set_status("fail")
@@ -1106,8 +1112,8 @@ def build_icesee_ui():
     .icesee-subtitle { color: rgba(0,0,0,.65); margin-bottom: 14px; }
     .icesee-card { border: 1px solid rgba(0,0,0,.10); border-radius: 12px; padding: 14px; background: #fff; }
     .icesee-h { font-size: 18px; font-weight: 800; margin: 2px 0 10px; }
-    .icesee-lbl { width: 120px; font-weight: 650; }
-    .icesee-k { width: 220px; font-weight: 650; color: rgba(0,0,0,.78); }
+    .icesee-lbl { min-width: 120px; font-weight: 650; }
+    .icesee-k { min-width: 180px; font-weight: 650; color: rgba(0,0,0,.78); }
     .icesee-subtle { color: rgba(0,0,0,.60); font-size: 12px; }
     .icesee-status { display:inline-block; padding: 8px 14px; border-radius: 999px; font-weight: 700; border: 1px solid rgba(0,0,0,.10); }
     .icesee-idle { background: rgba(0,0,0,.04); }
@@ -1247,9 +1253,6 @@ def build_icesee_ui():
     def _toggle_panels_from_tabs(_=None):
         mode = get_mode()
 
-        cluster_panel.layout.display = "block" if mode == MODE_REMOTE else "none"
-        cloud_panel.layout.display = "block" if mode == MODE_CLOUD else "none"
-
         is_remote = (mode == MODE_REMOTE)
         connect_btn.disabled = not is_remote
         submit_btn.disabled = not is_remote
@@ -1286,7 +1289,7 @@ def build_icesee_ui():
     )
     left_card = W.VBox([left])
     left_card.add_class("icesee-card")
-    left_card.layout = W.Layout(width="100%")
+    left_card.layout = W.Layout(width="100%", flex="0 0 42%", min_width="0")
 
     right = W.VBox(
         [
@@ -1298,6 +1301,7 @@ def build_icesee_ui():
     )
     right_card = W.VBox([right])
     right_card.add_class("icesee-card")
+    right_card.layout = W.Layout(width="100%", flex="0 0 58%", min_width="0")
 
     log_out.add_class("icesee-out")
     results_out.add_class("icesee-out")
@@ -1316,7 +1320,7 @@ def build_icesee_ui():
     page = W.VBox([header, row, actions_card], layout=W.Layout(width="100%"))
     page.add_class("icesee-page")
 
-    cloud_submit_btn.layout.display = "none"
+    # cloud_submit_btn.layout.display = "none"
 
     set_status("idle")
     rebuild_for_example()

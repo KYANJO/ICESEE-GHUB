@@ -1,0 +1,175 @@
+/* ICESEE Run Center — subtle “product” styling */
+
+.icesee-hero {
+  border: 1px solid rgba(0,0,0,.08);
+  border-radius: 14px;
+  padding: 16px 18px;
+  background: linear-gradient(180deg, rgba(255,255,255,.95), rgba(250,250,250,.95));
+  box-shadow: 0 8px 24px rgba(0,0,0,.06);
+  margin-bottom: 14px;
+}
+
+.icesee-hero h2 { margin: 0; }
+.icesee-hero p  { margin: 6px 0 0 0; color: #666; }
+
+/* Small helper row for chips / compact inline elements */
+.icesee-inline-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.icesee-chip {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1px solid rgba(0,0,0,.10);
+  border-radius: 999px;
+  background: rgba(255,255,255,.85);
+  color: #444;
+  font-size: 12px;
+}
+
+.icesee-panel {
+  border: 1px solid rgba(0,0,0,.08);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: rgba(255,255,255,.9);
+  margin-top: 12px;
+}
+
+.icesee-subtle { color: #666; font-size: 13px; }
+
+.icesee-divider {
+  height: 1px;
+  background: rgba(0,0,0,.08);
+  margin: 10px 0;
+}
+
+/* Make the main Jupyter Book content area much wider for the ICESEE GUI page */
+.bd-page-width,
+.bd-main .bd-content .bd-article-container,
+.bd-main .bd-content .bd-article,
+.bd-content .bd-article-container,
+article.bd-article {
+  max-width: 100% !important;
+  width: 100% !important;
+}
+
+/* Make notebook output stretch */
+.jp-Notebook,
+.jp-Cell,
+.jp-OutputArea,
+.jp-OutputArea-child,
+.output,
+.output_area {
+  max-width: 100% !important;
+  width: 100% !important;
+}
+
+/* ICESEE page wrapper */
+.icesee-page {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+/* Main two-column layout */
+.icesee-row {
+  display: flex;
+  gap: 24px;
+  width: 100%;
+  align-items: stretch;
+}
+
+.icesee-col {
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* Left settings panel narrower, right log/results panel wider */
+.icesee-row > .icesee-col:first-child {
+  flex: 0 0 42%;
+}
+
+.icesee-row > .icesee-col:last-child {
+  flex: 0 0 58%;
+}
+
+/* Cards */
+.icesee-card {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+/* Make ipywidgets breathe */
+.widget-label {
+  min-width: 140px !important;
+  white-space: nowrap;
+}
+
+.jupyter-widgets.widget-box {
+  width: 100%;
+}
+
+.jupyter-widgets.widget-inline-hbox {
+  gap: 10px;
+}
+
+/* Output boxes */
+.icesee-log,
+.icesee-out {
+  width: 100% !important;
+  box-sizing: border-box;
+}
+
+.icesee-log {
+  border: 1px solid rgba(0,0,0,.10);
+  border-radius: 12px;
+  padding: 10px;
+  background: #fff;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.icesee-out pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+/* Widget labels and inputs align better */
+.icesee-lbl,
+.icesee-k {
+  white-space: nowrap;
+}
+
+/* Make text inputs use available width */
+.jupyter-widgets .widget-text input,
+.jupyter-widgets .widget-textarea textarea,
+.jupyter-widgets .widget-dropdown select {
+  box-sizing: border-box;
+}
+
+/* Let widget containers use available space */
+.widget-text,
+.widget-textarea,
+.widget-dropdown,
+.widget-inttext,
+.widget-floattext {
+  width: 100% !important;
+}
+
+/* On smaller book widths, stack vertically */
+@media (max-width: 1200px) {
+  .icesee-row {
+    flex-direction: column;
+  }
+
+  .icesee-row > .icesee-col:first-child,
+  .icesee-row > .icesee-col:last-child {
+    flex: 1 1 100%;
+  }
+}
