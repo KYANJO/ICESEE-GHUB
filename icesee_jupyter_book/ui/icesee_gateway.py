@@ -195,11 +195,48 @@ def build_sidebar():
     """
     return W.HTML(sidebar_html)
 
+# back_link = W.HTML(
+#     '<div style="margin-bottom:12px;">'
+#     '<a href="http://127.0.0.1:8080/" style="font-weight:700; text-decoration:none;">'
+#     '← Back to ICESEE Book'
+#     '</a>'
+#     '</div>'
+# )
+back_link = W.HTML("""
+<style>
+.icesee-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 14px;
+  color: #0d6efd;
+  text-decoration: none;
+  transition: color 0.15s ease, transform 0.15s ease;
+}
+
+.icesee-back:hover {
+  color: #0b5ed7;
+  transform: translateX(-1px);
+}
+
+.icesee-back-wrap {
+  margin-bottom: 14px;
+}
+</style>
+
+<div class="icesee-back-wrap">
+  <a href="http://127.0.0.1:8080/" class="icesee-back">
+    ← Back to ICESEE Book
+  </a>
+</div>
+""")
+
 # ============================================================
 # UI builder (single entry point)
 # ============================================================
 def build_icesee_ui():
-    print("STEP 1: start UI")
+    # print("STEP 1: start UI")
     import traceback
     try:
         # -----------------------------
@@ -1434,7 +1471,7 @@ def build_icesee_ui():
         row = W.HBox([left_card, right_card], layout=W.Layout(width="100%", display="flex", gap="26px"))
         row.add_class("icesee-row")
 
-        page = W.VBox([header, row, actions_card], layout=W.Layout(width="100%"))
+        page = W.VBox([header, row, actions_card, back_link], layout=W.Layout(width="100%"))
         page.add_class("icesee-page")
 
         # cloud_submit_btn.layout.display = "none"
@@ -1442,18 +1479,18 @@ def build_icesee_ui():
         set_status("idle")
         rebuild_for_example()
         # print("STEP 2: widgets created")
-        # return page
-        sidebar = build_sidebar()
-        main_area = W.VBox([page], layout=W.Layout(width="100%"))
-        main_area.add_class("icesee-main")
+        return page
+        # sidebar = build_sidebar()
+        # main_area = W.VBox([page], layout=W.Layout(width="100%"))
+        # main_area.add_class("icesee-main")
 
-        shell = W.HBox(
-            [sidebar, main_area],
-            layout=W.Layout(width="100%", align_items="stretch")
-        )
-        shell.add_class("icesee-shell")
+        # shell = W.HBox(
+        #     [sidebar, main_area],
+        #     layout=W.Layout(width="100%", align_items="stretch")
+        # )
+        # shell.add_class("icesee-shell")
 
-        return shell
+        # return shell
     except Exception as e:
         import traceback
         print("ERROR:", e)

@@ -4,7 +4,6 @@ set -euo pipefail
 scriptDir="$(cd "$(dirname "$0")" && pwd)"
 repoRoot="$(cd "${scriptDir}/.." && pwd)"
 
-BOOK_DIR="${repoRoot}/icesee_jupyter_book/_build/html"
 VOILA_NOTEBOOK="${repoRoot}/icesee_jupyter_book/icesee_jupyter_notebooks/run_center_voila.ipynb"
 
 BOOK_PORT=8081
@@ -17,28 +16,75 @@ else
   PYTHON_BIN="$(command -v python3 || command -v python)"
 fi
 
+find_book_html_dir() {
+  local primary="${repoRoot}/icesee_jupyter_book/_build/html"
+
+  # First: the known historical location
+  if [ -d "${primary}" ] && [ -f "${primary}/index.html" ]; then
+    echo "${primary}"
+    return 0
+  fi
+
+  # Fallback: search only inside the repo
+  local found
+  found="$(find "${repoRoot}" -type d -path "*/_build/html" 2>/dev/null | while read -r d; do
+    if [ -f "$d/index.html" ]; then
+      echo "$d"
+      break
+    fi
+  done)"
+
+  if [ -n "${found}" ]; then
+    echo "${found}"
+    return 0
+  fi
+
+  return 1
+}
+
+find_run_center_html() {
+  local book_dir="$1"
+  local target="${book_dir}/icesee_jupyter_notebooks/run_center.html"
+
+  if [ -f "${target}" ]; then
+    echo "${target}"
+    return 0
+  fi
+
+  local found
+  found="$(find "${book_dir}" -type f -name "run_center.html" 2>/dev/null | head -n 1)"
+  if [ -n "${found}" ]; then
+    echo "${found}"
+    return 0
+  fi
+
+  return 1
+}
+
 cleanup() {
   jobs -p | xargs -r kill 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
+BOOK_DIR="$(find_book_html_dir)" || {
+  echo "[ICESEE][ERROR] Could not locate built book HTML under ${repoRoot}"
+  exit 2
+}
+
+RUN_CENTER_HTML="$(find_run_center_html "${BOOK_DIR}")" || {
+  echo "[ICESEE][ERROR] Could not locate run_center.html inside ${BOOK_DIR}"
+  exit 2
+}
+
+echo "[ICESEE] run_center=${RUN_CENTER_HTML}"
+
+echo "[ICESEE] Patching run_center.html"
+"${PYTHON_BIN}" "${repoRoot}/bin/patch_run_center_html.py" "${RUN_CENTER_HTML}"
+
 echo "[ICESEE] repoRoot=${repoRoot}"
 echo "[ICESEE] book=${BOOK_DIR}"
 echo "[ICESEE] voila notebook=${VOILA_NOTEBOOK}"
 echo "[ICESEE] python=${PYTHON_BIN}"
-
-if [ ! -d "${BOOK_DIR}" ]; then
-  echo "[ICESEE] Book build directory not found. Building book first..."
-  (
-    cd "${repoRoot}"
-    "${PYTHON_BIN}" -m jupyter_book build icesee_jupyter_book
-  )
-fi
-
-if [ ! -d "${BOOK_DIR}" ]; then
-  echo "[ICESEE][ERROR] Book build directory still not found: ${BOOK_DIR}"
-  exit 2
-fi
 
 if [ ! -f "${VOILA_NOTEBOOK}" ]; then
   echo "[ICESEE][ERROR] Voilà notebook not found: ${VOILA_NOTEBOOK}"

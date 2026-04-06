@@ -17,7 +17,11 @@ HOP_BY_HOP = {
 }
 
 
-def pick_target(path: str, book_port: int, voila_port: int) -> tuple[str, int]:
+def pick_target(request, book_port: int, voila_port: int):
+    path = request.path
+
+    # Book pages live under normal paths like /index.html, /intro.html, /_static/...
+    # Voilà app lives under /icesee-gui and its Jupyter runtime endpoints.
     if (
         path.startswith("/icesee-gui")
         or path.startswith("/api/")
@@ -26,14 +30,14 @@ def pick_target(path: str, book_port: int, voila_port: int) -> tuple[str, int]:
         or path.startswith("/kernelspecs/")
         or path.startswith("/files/")
         or path.startswith("/static/")
-        or path == "/api"
     ):
         return "127.0.0.1", voila_port
+
     return "127.0.0.1", book_port
 
 
 async def handle_http(request: web.Request) -> web.StreamResponse:
-    host, port = pick_target(request.path, request.app["book_port"], request.app["voila_port"])
+    host, port = pick_target(request, request.app["book_port"], request.app["voila_port"])
     upstream_url = f"http://{host}:{port}{request.rel_url}"
 
     headers = {
@@ -65,7 +69,7 @@ async def handle_http(request: web.Request) -> web.StreamResponse:
 
 
 async def handle_ws(request: web.Request) -> web.WebSocketResponse:
-    host, port = pick_target(request.path, request.app["book_port"], request.app["voila_port"])
+    host, port = pick_target(request, request.app["book_port"], request.app["voila_port"])
     upstream_url = f"http://{host}:{port}{request.rel_url}"
 
     client_ws = web.WebSocketResponse()
