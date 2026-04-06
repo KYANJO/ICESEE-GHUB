@@ -5,9 +5,11 @@ scriptDir="$(cd "$(dirname "$0")" && pwd)"
 repoRoot="$(cd "${scriptDir}/.." && pwd)"
 
 VOILA_NOTEBOOK="${repoRoot}/icesee_jupyter_book/icesee_jupyter_notebooks/run_center_voila.ipynb"
+ICESHEET_NOTEBOOK="${repoRoot}/icesee_jupyter_book/icesee_jupyter_notebooks/icesheets_voila.ipynb"
 
 BOOK_PORT=8081
 VOILA_PORT=8866
+ICESHEET_GUI_PORT=8870
 ROUTER_PORT=8080
 
 if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
@@ -19,13 +21,11 @@ fi
 find_book_html_dir() {
   local primary="${repoRoot}/icesee_jupyter_book/_build/html"
 
-  # First: the known historical location
   if [ -d "${primary}" ] && [ -f "${primary}/index.html" ]; then
     echo "${primary}"
     return 0
   fi
 
-  # Fallback: search only inside the repo
   local found
   found="$(find "${repoRoot}" -type d -path "*/_build/html" 2>/dev/null | while read -r d; do
     if [ -f "$d/index.html" ]; then
@@ -76,20 +76,26 @@ RUN_CENTER_HTML="$(find_run_center_html "${BOOK_DIR}")" || {
   exit 2
 }
 
-echo "[ICESEE] run_center=${RUN_CENTER_HTML}"
-
-# echo "[ICESEE] Patching run_center.html"
-# "${PYTHON_BIN}" "${repoRoot}/bin/patch_run_center_html.py" "${RUN_CENTER_HTML}"
-
 echo "[ICESEE] repoRoot=${repoRoot}"
 echo "[ICESEE] book=${BOOK_DIR}"
+echo "[ICESEE] run_center=${RUN_CENTER_HTML}"
 echo "[ICESEE] voila notebook=${VOILA_NOTEBOOK}"
+echo "[ICESEE] icesheet notebook=${ICESHEET_NOTEBOOK}"
 echo "[ICESEE] python=${PYTHON_BIN}"
 
 if [ ! -f "${VOILA_NOTEBOOK}" ]; then
   echo "[ICESEE][ERROR] Voilà notebook not found: ${VOILA_NOTEBOOK}"
   exit 2
 fi
+
+if [ ! -f "${ICESHEET_NOTEBOOK}" ]; then
+  echo "[ICESEE][ERROR] Ice-sheet Voilà notebook not found: ${ICESHEET_NOTEBOOK}"
+  exit 2
+fi
+
+# Optional patch step for built HTML launcher page
+# echo "[ICESEE] Patching run_center.html"
+# "${PYTHON_BIN}" "${repoRoot}/bin/patch_run_center_html.py" "${RUN_CENTER_HTML}"
 
 echo "[ICESEE] Starting static book on 127.0.0.1:${BOOK_PORT}"
 (
@@ -98,16 +104,25 @@ echo "[ICESEE] Starting static book on 127.0.0.1:${BOOK_PORT}"
 ) &
 BOOK_PID=$!
 
-echo "[ICESEE] Starting Voilà on 127.0.0.1:${VOILA_PORT}"
+echo "[ICESEE] Starting ICESEE GUI Voilà on 127.0.0.1:${VOILA_PORT}"
 (
   cd "${repoRoot}"
   exec "${PYTHON_BIN}" -m voila "${VOILA_NOTEBOOK}" \
     --no-browser \
     --Voila.ip=127.0.0.1 \
-    --port="${VOILA_PORT}" \
-    # --Voila.base_url=/icesee-gui/
+    --port="${VOILA_PORT}"
 ) &
 VOILA_PID=$!
+
+echo "[ICESEE] Starting Ice-Sheet Modeling GUI Voilà on 127.0.0.1:${ICESHEET_GUI_PORT}"
+(
+  cd "${repoRoot}"
+  exec "${PYTHON_BIN}" -m voila "${ICESHEET_NOTEBOOK}" \
+    --no-browser \
+    --Voila.ip=127.0.0.1 \
+    --port="${ICESHEET_GUI_PORT}"
+) &
+ICESHEET_PID=$!
 
 echo "[ICESEE] Starting router on 127.0.0.1:${ROUTER_PORT}"
 (
@@ -119,4 +134,11 @@ echo "[ICESEE] Starting router on 127.0.0.1:${ROUTER_PORT}"
 ) &
 ROUTER_PID=$!
 
-wait "${BOOK_PID}" "${VOILA_PID}" "${ROUTER_PID}"
+echo
+echo "[ICESEE] Services"
+echo "  Book:                    http://127.0.0.1:${ROUTER_PORT}/"
+echo "  ICESEE GUI:              http://127.0.0.1:${VOILA_PORT}/"
+echo "  Ice-Sheet Modeling GUI:  http://127.0.0.1:${ICESHEET_GUI_PORT}/"
+echo
+
+wait "${BOOK_PID}" "${VOILA_PID}" "${ICESHEET_PID}" "${ROUTER_PID}"
