@@ -13,6 +13,7 @@ parts:
     numbered: false
     chapters:
       - file: icesee_jupyter_notebooks/run_center
+      - file: icesee_jupyter_notebooks/icesheet_models
       # - file: icesee_jupyter_notebooks/latest_run
       # - file: icesee_jupyter_notebooks/flowline_gui
       # - file: icesee_jupyter_notebooks/icepack_gui
