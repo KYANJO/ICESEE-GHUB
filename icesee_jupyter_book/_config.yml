@@ -50,7 +50,8 @@ html:
   extra_navbar: |
     <a class="navbar-brand" href="./index.html">ICESEE-OnLINE</a>
     <span style="margin-left:10px"></span>
-    <a href="./icesee_jupyter_notebooks/run_center.html">Run Center</a>
+    # <a href="/icesee-gui/">Run Center</a>
+    <a href="/icesee-gui/" target="_blank" rel="noopener noreferrer">Open GUI</a>
     <span style="margin:0 8px; opacity:.4">|</span>
     <a href="./icesee_jupyter_notebooks/run_lorenz96_da.html">Tutorials</a>
     <span style="margin:0 8px; opacity:.4">|</span>
@@ -82,10 +83,10 @@ latex:
 
 # Launch button settings ------------------
 launch_buttons:
-  notebook_interface        : "jupyterlab"  # The interface interactive links will activate ["classic", "jupyterlab"]
-  binderhub_url             : "https://mybinder.org"  # The URL of the BinderHub (e.g., https://mybinder.org)
+  notebook_interface        : "classic"  # The interface interactive links will activate ["classic", "jupyterlab"]
+  binderhub_url             : ""  # The URL of the BinderHub (e.g., https://mybinder.org)
   jupyterhub_url            : ""  # The URL of the JupyterHub (e.g., https://datahub.berkeley.edu)
-  thebe                     : true  # Add a thebe button to pages (requires the repository to run on Binder)
+  thebe                     : false  # Add a thebe button to pages (requires the repository to run on Binder)
   colab_url                 : "" # The URL of Google Colab (https://colab.research.google.com)
   deepnote_url              : "" # The URL of Deepnote (https://deepnote.com)
 

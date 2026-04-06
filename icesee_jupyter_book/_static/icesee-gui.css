@@ -173,3 +173,21 @@ article.bd-article {
     flex: 1 1 100%;
   }
 }
+
+/* Reduce left sidebar width so the app gets more room */
+.bd-sidebar-primary {
+  max-width: 260px !important;
+  width: 260px !important;
+  flex: 0 0 260px !important;
+}
+
+/* Let main content expand more */
+.bd-main {
+  width: calc(100% - 260px) !important;
+  max-width: calc(100% - 260px) !important;
+}
+
+/* Keep the article area wide */
+.bd-page-width {
+  max-width: 100% !important;
+}

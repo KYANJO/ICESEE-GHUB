@@ -11,6 +11,9 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .config_io import dump_yaml
+from .example_discovery import find_run_script
+from .local_runner import run_dir
 
 @dataclass
 class AWSBatchConfig:
@@ -107,3 +110,59 @@ def aws_batch_status(cfg: AWSBatchConfig, job_id: str) -> dict:
         raise RuntimeError(err or out)
     job = json.loads(out)["jobs"][0]
     return {"status": job.get("status", "?"), "reason": job.get("statusReason", "")}
+
+@dataclass
+class CloudSubmitResult:
+    success: bool
+    run_dir: Path
+    batch_job_id: str
+    s3_run: str
+    run_id: str
+    messages: list[str]
+
+
+def submit_cloud_example(
+    *,
+    example_name: str,
+    example_cfg: dict,
+    config: dict,
+    region: str,
+    profile: str | None,
+    s3_prefix: str,
+    job_queue: str,
+    job_definition: str,
+    job_name: str,
+) -> CloudSubmitResult:
+    rd = run_dir()
+    dump_yaml(config, rd / "params.yaml")
+
+    cfg = AWSBatchConfig(
+        region=region or "us-east-1",
+        profile=(profile or None),
+        s3_prefix=s3_prefix,
+        job_queue=job_queue,
+        job_definition=job_definition,
+        job_name=job_name or "icesee",
+    )
+
+    aws_test(cfg)
+    resp = aws_batch_submit(cfg, rd, example_name, find_run_script(example_cfg).name)
+
+    messages = [
+        "[cloud] Submitted.",
+        f"batch_job_id: {resp['batch_job_id']}",
+        f"s3_run      : {resp['s3_run']}",
+        "",
+        "[batch image requirement]",
+        "Your AWS Batch container must read ICESEE_S3_RUN and ICESEE_RUN_SCRIPT,",
+        "download params.yaml from S3, run, then sync results back to S3.",
+    ]
+
+    return CloudSubmitResult(
+        success=True,
+        run_dir=rd,
+        batch_job_id=resp["batch_job_id"],
+        s3_run=resp["s3_run"],
+        run_id=resp["run_id"],
+        messages=messages,
+    )
