@@ -226,8 +226,8 @@ back_link = W.HTML("""
 </style>
 
 <div class="icesee-back-wrap">
-  <a href="http://127.0.0.1:8080/" class="icesee-back">
-    ← Back to ICESEE Book
+  <a href="http://127.0.0.1:8080/icesee_jupyter_notebooks/run_center.html" class="icesee-back">
+    ← Back to ICESEE Run Center
   </a>
 </div>
 """)

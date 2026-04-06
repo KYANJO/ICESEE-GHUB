@@ -78,8 +78,8 @@ RUN_CENTER_HTML="$(find_run_center_html "${BOOK_DIR}")" || {
 
 echo "[ICESEE] run_center=${RUN_CENTER_HTML}"
 
-echo "[ICESEE] Patching run_center.html"
-"${PYTHON_BIN}" "${repoRoot}/bin/patch_run_center_html.py" "${RUN_CENTER_HTML}"
+# echo "[ICESEE] Patching run_center.html"
+# "${PYTHON_BIN}" "${repoRoot}/bin/patch_run_center_html.py" "${RUN_CENTER_HTML}"
 
 echo "[ICESEE] repoRoot=${repoRoot}"
 echo "[ICESEE] book=${BOOK_DIR}"
