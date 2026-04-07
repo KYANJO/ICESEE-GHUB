@@ -224,7 +224,9 @@ if [[ ! -f "${ICESEE_REPO}/pyproject.toml" ]]; then
   exit 2
 fi
 
-python -m pip install -U pip setuptools wheel
+python -m pip install -U pip setuptools wheel 
+
+python -m pip install voila asyncio 
 
 # Install ICESEE (editable locally, non-editable for apps build)
 if [[ "${apps}" == "true" ]]; then
@@ -232,6 +234,58 @@ if [[ "${apps}" == "true" ]]; then
 else
   python -m pip install -e "${ICESEE_REPO}[viz,mpi]"
 fi
+
+# # --->
+# # ------------------------------------------------------------
+# # Install ICESEE-GHUB root package so icesee_jupyter_book
+# # and the Jupyter server extension are available.
+# # ------------------------------------------------------------
+# ICESEE_GHUB_ROOT="$(cd "${ICESEE_REPO}/../.." && pwd)"
+# echo "ICESEE_GHUB_ROOT: ${ICESEE_GHUB_ROOT}"
+
+# if [[ ! -f "${ICESEE_GHUB_ROOT}/pyproject.toml" ]]; then
+#   echo "ERROR: pyproject.toml not found in ICESEE_GHUB_ROOT=${ICESEE_GHUB_ROOT}"
+#   exit 2
+# fi
+
+# echo "Installing ICESEE-GHUB root package..."
+# if [[ "${apps}" == "true" ]]; then
+#   python -m pip install "${ICESEE_GHUB_ROOT}"
+# else
+#   python -m pip install -e "${ICESEE_GHUB_ROOT}"
+# fi
+
+# # Add ICESEE_GHUB_ROOT to python path 
+# export PYTHONPATH="${ICESEE_GHUB_ROOT}:${PYTHONPATH:-}"
+
+# echo "Verifying icesee_jupyter_book.server import..."
+# python - <<'PY'
+# import icesee_jupyter_book.server
+# print("server import ok")
+# PY
+
+# echo "Writing Jupyter server config for ICESEE extension..."
+# mkdir -p "${CONDA_PREFIX}/etc/jupyter/jupyter_server_config.d"
+# cat > "${CONDA_PREFIX}/etc/jupyter/jupyter_server_config.d/icesee.json" <<'EOF'
+# {
+#   "ServerApp": {
+#     "jpserver_extensions": {
+#       "icesee_jupyter_book.server": true
+#     }
+#   }
+# }
+# EOF
+
+# echo "Wrote: ${CONDA_PREFIX}/etc/jupyter/jupyter_server_config.d/icesee.json"
+# cat "${CONDA_PREFIX}/etc/jupyter/jupyter_server_config.d/icesee.json"
+
+# echo "Enabling ICESEE Jupyter server extension..."
+# python -m jupyter server extension enable icesee_jupyter_book.server --sys-prefix || true
+
+# echo "Listing Jupyter server extensions..."
+# python -m jupyter server extension list || true
+# # <----
+
 
 # Sanity: verify mpi4py + h5py(mpi) are actually usable from this kernel env
 python - <<PY

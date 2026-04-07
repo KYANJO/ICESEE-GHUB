@@ -51,7 +51,7 @@ Detailed coupling notes and run scripts are maintained upstream:
 
 ---
 
-```{button-link} running_with_containers
+```{button-link} running_with_containers.html
 :color: secondary
 :expand:
 Running with Containers

@@ -1,7 +1,7 @@
 version: 1
 
 project:
-  title: ICESEE-ONLINE
+  title: icesee
   exports:
     - format: html
       template: book
