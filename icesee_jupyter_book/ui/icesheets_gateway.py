@@ -5,6 +5,8 @@ import io
 import yaml
 import zipfile
 import shutil
+import threading
+import time
 import subprocess
 from pathlib import Path
 from IPython.display import FileLink
@@ -226,24 +228,41 @@ back_link = W.HTML("""
 </div>
 """)
 
+# def expand_remote_home(path: str) -> str:
+#     if path is None:
+#         return ""
+#     path = str(path).strip()
+#     if not path:
+#         return ""
+#     if path.startswith("/"):
+#         return path
+#     if path.startswith("~/"):
+#         return f"$HOME/{path[2:]}"
+#     if path == "~":
+#         return "$HOME"
+#     return path
+
 def expand_remote_home(path: str) -> str:
     if path is None:
         return ""
     path = str(path).strip()
     if not path:
         return ""
-    if path.startswith("/"):
-        return path
-    if path.startswith("~/"):
-        return f"$HOME/{path[2:]}"
-    if path == "~":
-        return "$HOME"
     return path
 
 def make_remote_run_dir(base_dir="~/r-arobel3-0", tag="icesee") -> str:
     import time
     ts = time.strftime("%Y%m%d-%H%M%S")
-    return f"{base_dir.rstrip('/')}/{tag}-{ts}"
+    base = str(base_dir).rstrip("/")
+    return f"{base}/{tag}-{ts}"
+
+def normalize_remote_path(path: str) -> str:
+    path = expand_remote_home(path)
+    if not path:
+        return ""
+    while "//" in path:
+        path = path.replace("//", "/")
+    return path
 
 def submit_remote_icesheets(
     *,
@@ -279,199 +298,293 @@ def submit_remote_icesheets(
     test_mode: bool = False,
     run_file: str = "",
 ):
+    import base64
+    import time
+
     messages: list[str] = []
 
     if not host or not user:
         raise ValueError("Provide Host + User first.")
 
-    rbase = expand_remote_home(remote_base_dir.strip() or "~/r-arobel3-0")
-    rdir = make_remote_run_dir(rbase, remote_tag.strip() or "icesheets")
-    rdir = resolve_remote_abs_path(host, user, port, rdir)
-    messages.append(f"[remote] Remote run dir: {rdir}")
+    # ---------------------------------------------------------
+    # Remote base/run paths
+    # ---------------------------------------------------------
+    remote_base_input = (remote_base_dir or "").strip() or "~/r-arobel3-0"
+    remote_base_shell = expand_remote_home(remote_base_input)
+    remote_base_abs = resolve_remote_abs_path(host, user, port, remote_base_shell)
+
+    tag = (remote_tag or "").strip() or "icesheets"
+    # ts = time.strftime("%Y%m%d-%H%M%S")
+    # remote_run_dir = f"{remote_base_abs.rstrip('/')}/{tag}-{ts}"
+    
+    remote_run_dir = f"{remote_base_abs.rstrip('/')}/{tag}/runs/{model}_{backend}"
+    remote_submit_script = f"{remote_run_dir}/run_icesheets.sbatch"
+
+    messages.append(f"[remote] Remote base dir : {remote_base_abs}")
+    messages.append(f"[remote] Remote run dir  : {remote_run_dir}")
 
     account_line, mail_lines = slurm_optional_lines(
         slurm_account.strip(),
-        slurm_mail.strip()
+        slurm_mail.strip(),
     )
+
+    spack_path = None
+    run_file_name = Path(run_file).name if run_file else ""
+    run_file_py = Path(run_file_name).with_suffix(".py").name if run_file_name else ""
+
+    local_example_dir = str(Path(example_dir).expanduser())
+    local_exec_dir = str(Path(exec_dir).expanduser())
+
+    messages.append(f"[remote] example_dir input : {local_example_dir}")
+    messages.append(f"[remote] exec_dir input    : {local_exec_dir}")
+    messages.append(f"[remote] run_file input    : {run_file or '(none)'}")
+    messages.append(f"[remote] test_mode         : {test_mode}")
 
     # ---------------------------------------------------------
     # Backend setup
     # ---------------------------------------------------------
-    spack_path = None
-    run_file_name = Path(run_file).name if run_file else ""
-    run_file_py = Path(run_file_name).with_suffix(".py").name if run_file_name else ""
-    remote_example_dir = expand_remote_home(example_dir)
-    remote_exec_dir = expand_remote_home(exec_dir)
+    if backend == "spack":
+        if not spack_enable:
+            raise RuntimeError("ICESEE-Spack backend requires spack_enable=True")
 
-    messages.append(f"[remote] example_dir input : {example_dir}")
-    messages.append(f"[remote] remote_example_dir: {remote_example_dir}")
-    messages.append(f"[remote] exec_dir input    : {exec_dir}")
-    messages.append(f"[remote] remote_exec_dir   : {remote_exec_dir}")
-    messages.append(f"[remote] run_file input    : {run_file}")
+        spack_parent = remote_base_abs
+        spack_name = spack_dirname.strip() or "ICESEE-Spack"
+        repo = spack_repo_url.strip()
+
+        messages.append("[remote] Spack backend enabled")
+        messages.append(f"  parent: {spack_parent}")
+        messages.append(f"  repo  : {repo}")
+        messages.append(f"  name  : {spack_name}")
+
+        spack_path_raw, (rc, out, err) = remote_ensure_spack(
+            host, user, port, spack_parent, spack_name, repo
+        )
+        if out.strip():
+            messages.append(out.strip())
+        if err.strip():
+            messages.append(err.strip())
+        if rc != 0:
+            raise RuntimeError("Failed to ensure ICESEE-Spack on remote host.")
+
+        spack_path = resolve_remote_abs_path(host, user, port, spack_path_raw)
+        messages.append(f"[remote] Resolved ICESEE-Spack path: {spack_path}")
+
+        if spack_install_if_needed:
+            install_flag = spack_install_mode or ""
+            messages.append(f"[remote] Spack install requested: {install_flag or '(default)'}")
+            rc, out, err = remote_maybe_install_spack(
+                host, user, port, spack_path, install_flag, spack_slurm_dir, spack_pmix_dir
+            )
+            if out.strip():
+                messages.append(out.strip())
+            if err.strip():
+                messages.append(err.strip())
+            if rc != 0:
+                raise RuntimeError("Remote ICESEE-Spack install failed.")
+
+    elif backend == "container":
+        messages.append("[remote] ICESEE-Container backend selected")
+        messages.append("[remote] Container setup will be handled inside the submitted Slurm job.")
+    else:
+        raise RuntimeError(f"Unsupported backend: {backend}")
+    
+    clean_cmd = f'''
+    rm -rf "{remote_run_dir}"
+    mkdir -p "{remote_run_dir}"
+    '''
+    mkres = ssh_run(host, user, port, clean_cmd, timeout=30)
+
+    # ---------------------------------------------------------
+    # Stage local example to remote run dir
+    # ---------------------------------------------------------
+    local_example_path = Path(local_example_dir)
+    if not local_example_path.exists():
+        raise RuntimeError(f"Local example path does not exist: {local_example_path}")
+
+    mkres = ssh_run(host, user, port, f'mkdir -p "{remote_run_dir}"', timeout=30)
+    if mkres.returncode != 0:
+        raise RuntimeError(f"Failed to create remote run dir:\n{mkres.stderr}")
+
+    local_parent = str(local_example_path.resolve().parent)
+    local_name = local_example_path.resolve().name
+
+    rsync_cmd = [
+        "rsync",
+        "-az",
+        "-e",
+        f"ssh -p {port}",
+        f"{local_parent}/{local_name}",
+        f"{user}@{host}:{remote_run_dir}/",
+    ]
+    rs = subprocess.run(rsync_cmd, capture_output=True, text=True)
+    if rs.returncode != 0:
+        raise RuntimeError(
+            "Failed to copy local example to remote host\n"
+            f"STDOUT:\n{rs.stdout}\n\nSTDERR:\n{rs.stderr}"
+        )
+
+    remote_example_dir = f"{remote_run_dir}/{local_name}"
+    remote_exec_dir = f"{remote_run_dir}/execution"
+
+    messages.append(f"[remote] staged example dir: {remote_example_dir}")
+    messages.append(f"[remote] staged exec dir   : {remote_exec_dir}")
 
     # ---------------------------------------------------------
     # Build model-specific run block
     # ---------------------------------------------------------
     if backend == "spack":
+        issm_matlab_setup = (
+            "addpath([getenv('ISSM_DIR') '/bin'], [getenv('ISSM_DIR') '/lib']); "
+            "issmversion; "
+        )
         if test_mode:
             if model == "issm":
-                run_block = f"""
+                run_block = f'''
 cd "{remote_example_dir}"
-matlab -nodesktop -nosplash -r "issmversion; exit"
-"""
+matlab -nodesktop -nosplash -r "{issm_matlab_setup}; exit"
+'''
             elif model == "icepack":
-                run_block = f"""
+                run_block = f'''
 cd "{remote_example_dir}"
 python -c "import icepack; print('Icepack import successful')"
-"""
+'''
             else:
                 raise RuntimeError(f"Unsupported model: {model}")
-
         else:
             if model == "issm":
-                if run_file_name.endswith(".m"):
-                    run_block = f"""
+                target_m = run_file_name if run_file_name.endswith(".m") else "runme.m"
+                run_block = f'''
 cd "{remote_example_dir}"
-matlab -nodesktop -nosplash -r "run('{run_file_name}'); exit"
-"""
-                else:
-                    run_block = f"""
-cd "{remote_example_dir}"
-matlab -nodesktop -nosplash -r "run('runme.m'); exit"
-"""
+matlab -nodesktop -nosplash -r "{issm_matlab_setup} run('{target_m}'); exit"
+'''
             elif model == "icepack":
                 if run_file_name.endswith(".py"):
-                    run_block = f"""
+                    run_block = f'''
 cd "{remote_example_dir}"
 python "{run_file_name}"
-"""
+'''
                 elif run_file_name.endswith(".ipynb"):
-                    run_block = f"""
+                    run_block = f'''
 cd "{remote_example_dir}"
 jupyter nbconvert --to script "{run_file_name}"
 python "{run_file_py}"
-"""
+'''
                 else:
-                    run_block = f"""
+                    run_block = f'''
 cd "{remote_example_dir}"
 python -c "import icepack; print('Icepack import successful')"
-"""
+'''
             else:
                 raise RuntimeError(f"Unsupported model: {model}")
 
-        activation_block = f"""
+        activation_block = f'''
 cd "{spack_path}"
 source "{spack_path}/scripts/activate.sh"
-"""
-
+'''
         body = activation_block + "\n" + run_block
 
     else:
-        sif_path = f"{expand_remote_home(remote_base_dir)}/{remote_tag}/ICESEE-Containers/spack-managed/combined-container/combined-env.sif"
+        container_root = f"{remote_base_abs.rstrip('/')}/{tag}/ICESEE-Containers"
+        container_dir = f"{container_root}/spack-managed/combined-container"
+        sif_path = f"{container_dir}/combined-env.sif"
+        def_path = f"{container_dir}/combined-env-inbuilt-matlab.def"
 
-        if test_mode:
-            if model == "issm":
-                run_block = f"""
-mkdir -p "{remote_example_dir}" "{remote_exec_dir}"
-srun --mpi=pmix -n {slurm_ntasks} apptainer exec \\
--B "{remote_example_dir}":/opt/ISSM/examples,"{remote_exec_dir}":/opt/ISSM/execution \\
-"{sif_path}" with-issm matlab -nodesktop -nosplash -r "issmversion; exit"
-"""
-            elif model == "icepack":
-                run_block = f"""
-mkdir -p "{remote_example_dir}" "{remote_exec_dir}"
-apptainer exec \\
--B "{remote_example_dir}":/workspace/example,"{remote_exec_dir}":/workspace/run \\
-"{sif_path}" with-icepack python -c "import icepack; print('Icepack import successful')"
-"""
-            else:
-                raise RuntimeError(f"Unsupported model: {model}")
-
-        else:
-            if model == "issm":
-                if run_file_name.endswith(".m"):
-                    run_block = f"""
-mkdir -p "{remote_example_dir}" "{remote_exec_dir}"
-srun --mpi=pmix -n {slurm_ntasks} apptainer exec \\
--B "{remote_example_dir}":/opt/ISSM/examples,"{remote_exec_dir}":/opt/ISSM/execution \\
-"{sif_path}" with-issm matlab -nodesktop -nosplash -r "cd('/opt/ISSM/examples'); run('{run_file_name}'); exit"
-"""
-                else:
-                    run_block = f"""
-mkdir -p "{remote_example_dir}" "{remote_exec_dir}"
-srun --mpi=pmix -n {slurm_ntasks} apptainer exec \\
--B "{remote_example_dir}":/opt/ISSM/examples,"{remote_exec_dir}":/opt/ISSM/execution \\
-"{sif_path}" with-issm matlab -nodesktop -nosplash -r "run('runme.m'); exit"
-"""
-            elif model == "icepack":
-                if run_file_name.endswith(".py"):
-                    run_block = f"""
-mkdir -p "{remote_example_dir}" "{remote_exec_dir}"
-apptainer exec \\
--B "{remote_example_dir}":/workspace/example,"{remote_exec_dir}":/workspace/run \\
-"{sif_path}" with-icepack bash -lc 'cd /workspace/example && python "{run_file_name}"'
-"""
-                elif run_file_name.endswith(".ipynb"):
-                    run_block = f"""
-mkdir -p "{remote_example_dir}" "{remote_exec_dir}"
-apptainer exec \\
--B "{remote_example_dir}":/workspace/example,"{remote_exec_dir}":/workspace/run \\
-"{sif_path}" with-icepack bash -lc 'cd /workspace/example && jupyter nbconvert --to script "{run_file_name}" && python "{run_file_py}"'
-"""
-                else:
-                    run_block = f"""
-mkdir -p "{remote_example_dir}" "{remote_exec_dir}"
-apptainer exec "{sif_path}" with-icepack python -c "import icepack; print('Icepack import successful')"
-"""
-            else:
-                raise RuntimeError(f"Unsupported model: {model}")
-
-        container_setup = f"""
+        container_setup = f'''
 # --- ICESEE-Container / Apptainer setup ---
 echo "[icesheets] Checking apptainer..."
 
 if ! command -v apptainer >/dev/null 2>&1; then
-echo "[icesheets] apptainer not found in PATH. Trying module load apptainer..."
-source /etc/profile >/dev/null 2>&1 || true
-module load apptainer >/dev/null 2>&1 || true
+    echo "[icesheets] apptainer not found in PATH. Trying module load apptainer..."
+    source /etc/profile >/dev/null 2>&1 || true
+    module load apptainer >/dev/null 2>&1 || true
 fi
 
 if ! command -v apptainer >/dev/null 2>&1; then
-echo "[icesheets][ERROR] apptainer not found, and module load apptainer failed."
-exit 2
+    echo "[icesheets][ERROR] apptainer not found, and module load apptainer failed."
+    exit 2
 fi
 
-container_root="{expand_remote_home(remote_base_dir)}/{remote_tag}/ICESEE-Containers"
-container_dir="$container_root/spack-managed/combined-container"
-sif_path="$container_dir/combined-env.sif"
-def_path="$container_dir/combined-env-inbuilt-matlab.def"
+container_root="{container_root}"
+container_dir="{container_dir}"
+sif_path="{sif_path}"
+def_path="{def_path}"
 
-mkdir -p "{expand_remote_home(remote_base_dir)}/{remote_tag}"
+mkdir -p "{remote_base_abs.rstrip('/')}/{tag}"
 
 if [ ! -d "$container_root" ]; then
-echo "[icesheets] Cloning ICESEE-Containers..."
-git clone https://github.com/ICESEE-project/ICESEE-Containers.git "$container_root"
+    echo "[icesheets] Cloning ICESEE-Containers..."
+    git clone https://github.com/ICESEE-project/ICESEE-Containers.git "$container_root"
 fi
 
 cd "$container_dir"
 
 if [ ! -f "$sif_path" ]; then
-echo "[icesheets] Building Apptainer image..."
-if [ ! -f "$def_path" ]; then
-    echo "[icesheets][ERROR] Definition file not found: $def_path"
-    exit 2
-fi
-apptainer build combined-env.sif combined-env-inbuilt-matlab.def
+    echo "[icesheets] Building Apptainer image..."
+    if [ ! -f "$def_path" ]; then
+        echo "[icesheets][ERROR] Definition file not found: $def_path"
+        exit 2
+    fi
+    apptainer build combined-env.sif combined-env-inbuilt-matlab.def
 else
-echo "[icesheets] Using existing Apptainer image: $sif_path"
+    echo "[icesheets] Using existing Apptainer image: $sif_path"
 fi
-"""
+'''
+
+        if test_mode:
+            if model == "issm":
+                run_block = f'''
+mkdir -p "{remote_exec_dir}"
+srun --mpi=pmix -n {slurm_ntasks} apptainer exec \
+-B "{remote_example_dir}":/opt/ISSM/examples,"{remote_exec_dir}":/opt/ISSM/execution \
+"{sif_path}" with-issm matlab -nodesktop -nosplash -r "issmversion; exit"
+'''
+            elif model == "icepack":
+                run_block = f'''
+mkdir -p "{remote_exec_dir}"
+apptainer exec \
+-B "{remote_example_dir}":/workspace/example,"{remote_exec_dir}":/workspace/run \
+"{sif_path}" with-icepack python -c "import icepack; print('Icepack import successful')"
+'''
+            else:
+                raise RuntimeError(f"Unsupported model: {model}")
+        else:
+            if model == "issm":
+                target_m = run_file_name if run_file_name.endswith(".m") else "runme.m"
+                run_block = f'''
+mkdir -p "{remote_exec_dir}"
+srun --mpi=pmix -n {slurm_ntasks} apptainer exec \
+-B "{remote_example_dir}":/opt/ISSM/examples,"{remote_exec_dir}":/opt/ISSM/execution \
+"{sif_path}" with-issm matlab -nodesktop -nosplash -r "cd('/opt/ISSM/examples'); run('{target_m}'); exit"
+'''
+            elif model == "icepack":
+                if run_file_name.endswith(".py"):
+                    run_block = f'''
+mkdir -p "{remote_exec_dir}"
+apptainer exec \
+-B "{remote_example_dir}":/workspace/example,"{remote_exec_dir}":/workspace/run \
+"{sif_path}" with-icepack bash -lc 'cd /workspace/example && python "{run_file_name}"'
+'''
+                elif run_file_name.endswith(".ipynb"):
+                    run_block = f'''
+mkdir -p "{remote_exec_dir}"
+apptainer exec \
+-B "{remote_example_dir}":/workspace/example,"{remote_exec_dir}":/workspace/run \
+"{sif_path}" with-icepack bash -lc 'cd /workspace/example && jupyter nbconvert --to script "{run_file_name}" && python "{run_file_py}"'
+'''
+                else:
+                    run_block = f'''
+mkdir -p "{remote_exec_dir}"
+apptainer exec "{sif_path}" with-icepack python -c "import icepack; print('Icepack import successful')"
+'''
+            else:
+                raise RuntimeError(f"Unsupported model: {model}")
+
         body = container_setup + "\n" + run_block
 
     # ---------------------------------------------------------
     # Render sbatch
     # ---------------------------------------------------------
-    outfile = "icesheets-%j.out"
+    outfile = f"{remote_run_dir}/icesheets-%j.out"
 
     slurm_text = f"""#!/bin/bash
 #SBATCH -J {slurm_job_name.strip() or "ICESHEETS"}
@@ -487,9 +600,12 @@ fi
 
 set -euo pipefail
 
+cd "{remote_run_dir}"
+
 echo "[icesheets] Host: $(hostname)"
 echo "[icesheets] Date: $(date)"
 echo "[icesheets] PWD : $(pwd)"
+echo "[icesheets] Run dir: {remote_run_dir}"
 
 {sanitize_multiline(remote_module_lines)}
 {sanitize_multiline(remote_export_lines)}
@@ -497,42 +613,89 @@ echo "[icesheets] PWD : $(pwd)"
 {body}
 """
 
-    messages.append("[remote] Writing slurm_run.sh, then sbatch…")
+    messages.append("[remote] Writing slurm_run.sh, then sbatch...")
 
-    mkdir_cmd = f'mkdir -p "{rdir}" && echo "[remote] ensured run dir: {rdir}"'
-    mkres = ssh_run(host, user, port, mkdir_cmd, timeout=30)
-    if mkres.returncode != 0:
-        raise RuntimeError(f"Failed to create remote run dir: {rdir}\n{mkres.stderr}")
-    if (mkres.stdout or "").strip():
-        messages.append(mkres.stdout.strip())
+    import shlex
+    encoded = base64.b64encode(slurm_text.encode("utf-8")).decode("ascii")
 
-    jobid = remote_stage_and_submit(
-        host=host,
-        user=user,
-        port=port,
-        remote_dir=rdir,
-        params_text="",   # no params.yaml needed for model-only currently
-        slurm_text=slurm_text,
+    remote_submit_script_q = shlex.quote(remote_submit_script)
+    remote_run_dir_q = shlex.quote(remote_run_dir)
+    encoded_q = shlex.quote(encoded)
+
+    # Write the sbatch file using python -c instead of heredoc
+    write_cmd = (
+        "python3 -c "
+        + shlex.quote(
+            "import base64, pathlib; "
+            f"p = pathlib.Path({remote_submit_script!r}); "
+            "p.parent.mkdir(parents=True, exist_ok=True); "
+            f"p.write_text(base64.b64decode({encoded!r}).decode('utf-8'), encoding='utf-8'); "
+            "print(str(p))"
+        )
     )
 
-    verify_cmd = f'if [ -d "{rdir}" ]; then echo EXISTS; else echo MISSING; fi'
+    wres = ssh_run(host, user, port, write_cmd, timeout=60)
+    if wres.returncode != 0:
+        raise RuntimeError(
+            "Failed to write remote sbatch script\n"
+            f"STDOUT:\n{wres.stdout}\n\nSTDERR:\n{wres.stderr}"
+        )
+    if (wres.stdout or "").strip():
+        messages.append(f"[remote] wrote script: {(wres.stdout or '').strip()}")
+
+    verify_cmd = (
+        f'test -f {remote_submit_script_q} && '
+        f'echo FOUND && ls -lah {remote_submit_script_q} || '
+        f'(echo MISSING && ls -lah {remote_run_dir_q} && exit 1)'
+    )
+
     vres = ssh_run(host, user, port, verify_cmd, timeout=30)
+    if vres.returncode != 0:
+        raise RuntimeError(
+            "Remote submit script was not found after write step\n"
+            f"STDOUT:\n{vres.stdout}\n\nSTDERR:\n{vres.stderr}"
+        )
     if (vres.stdout or "").strip():
-        messages.append(f"[remote] run dir check: {vres.stdout.strip()}")
+        messages.append((vres.stdout or "").strip())
+
+    submit_cmd = f"sbatch {remote_submit_script_q}"
+    sres = ssh_run(host, user, port, submit_cmd, timeout=60)
+    if sres.returncode != 0:
+        raise RuntimeError(
+            "Failed to submit remote sbatch script\n"
+            f"STDOUT:\n{sres.stdout}\n\nSTDERR:\n{sres.stderr}"
+        )
+
+    stdout = (sres.stdout or "").strip()
+    stderr = (sres.stderr or "").strip()
+
+    if stdout:
+        messages.append(stdout)
+    if stderr:
+        messages.append(stderr)
+
+    jobid = None
+    for line in stdout.splitlines():
+        line = line.strip()
+        if "Submitted batch job" in line:
+            jobid = line.split()[-1]
+            break
+
+    if not jobid:
+        raise RuntimeError(f"Could not parse job ID from sbatch output:\n{stdout}")
 
     messages.append("[remote] ✅ Submitted model-only slurm_run.sh")
     messages.append(f"  jobid : {jobid}")
-    messages.append(f"  rdir  : {rdir}")
+    messages.append(f"  rdir  : {remote_run_dir}")
 
     return {
         "success": True,
         "jobid": jobid,
-        "remote_dir": rdir,
-        "log_file": f"{rdir}/icesheets-{jobid}.out" if jobid else None,
+        "remote_dir": remote_run_dir,
+        "log_file": f"{remote_run_dir}/icesheets-{jobid}.out" if jobid else None,
         "spack_path": spack_path,
         "messages": messages,
     }
-
 
 def build_icesheets_ui():
     try:
@@ -566,6 +729,12 @@ def build_icesheets_ui():
         # =========================================================
         # Controls
         # =========================================================
+        auto_tail_btn = W.Button(
+            value=False,
+            description="Start auto tail",
+            icon="refresh",
+            button_style="info",
+        )
         ui_mode_dd = W.ToggleButtons(
             options=[("Basic", "basic"), ("Advanced", "advanced")],
             value="basic",
@@ -799,55 +968,66 @@ def build_icesheets_ui():
 
             run_file = selected_run_file()
             run_file_name = Path(run_file).name if run_file else ""
-            py_name = Path(run_file_name).with_suffix(".py").name if run_file_name else ""
-
-            if backend == "spack":
-                if model == "issm":
-                    if ui_mode_dd.value == "advanced" and run_file_name.endswith(".m"):
-                        return f'''
-cd "{example_path}"
-matlab -nodesktop -nosplash -r "run('{run_file_name}'); exit"
-'''
-                    return f'''
-cd "{example_path}"
-matlab -nodesktop -nosplash -r "issmversion; exit"
-'''
-
-                # icepack + spack
-                if ui_mode_dd.value == "advanced" and run_file_name.endswith(".py"):
-                    return f'''
-cd "{example_path}"
-python "{run_file_name}"
-'''
-                if ui_mode_dd.value == "advanced" and run_file_name.endswith(".ipynb"):
-                    return f'''
-cd "{example_path}"
-if [ ! -f "{py_name}" ]; then
-    jupyter nbconvert --to script "{run_file_name}"
-fi
-python "{py_name}"
-'''
-                return f'''
-cd "{example_path}"
-python -c "import icepack; print('Icepack import successful')"
-'''
+            run_file_py = Path(run_file_name).with_suffix(".py").name if run_file_name else ""
 
             # ---------------------------------------------------------
-            # container backend
+            # Default behavior when user has not explicitly chosen a run target
+            # ---------------------------------------------------------
+            if model == "issm":
+                default_target = "runme.m"
+            else:
+                default_target = ""
+
+            chosen_target = run_file_name or default_target
+
+            # ---------------------------------------------------------
+            # Spack backend
+            # ---------------------------------------------------------
+            if backend == "spack":
+                if model == "issm":
+                    if chosen_target.endswith(".m"):
+                        return f'''
+        cd "{example_path}"
+        matlab -nodesktop -nosplash -r "run('{chosen_target}'); exit"
+        '''
+                    return f'''
+        cd "{example_path}"
+        matlab -nodesktop -nosplash -r "issmversion; exit"
+        '''
+
+                # icepack + spack
+                if chosen_target.endswith(".py"):
+                    return f'''
+        cd "{example_path}"
+        python "{chosen_target}"
+        '''
+                if chosen_target.endswith(".ipynb"):
+                    return f'''
+        cd "{example_path}"
+        jupyter nbconvert --to script "{chosen_target}"
+        python "{Path(chosen_target).with_suffix(".py").name}"
+        '''
+                return f'''
+        cd "{example_path}"
+        python -c "import icepack; print('Icepack import successful')"
+        '''
+
+            # ---------------------------------------------------------
+            # Container backend
             # ---------------------------------------------------------
             remote_root = f"{expand_remote_home(remote_base_dir.value)}/{remote_tag.value}"
             container_dir = f"{remote_root}/ICESEE-Containers/spack-managed/combined-container"
             sif_path = f"{container_dir}/combined-env.sif"
 
             if model == "issm":
-                if ui_mode_dd.value == "advanced" and run_file_name.endswith(".m"):
+                if chosen_target.endswith(".m"):
                     return f"""
         # --- ISSM via ICESEE-Container ---
         mkdir -p "{example_path}" "{exec_path}"
 
         srun --mpi=pmix -n {slurm_ntasks.value} apptainer exec \\
         -B "{example_path}":/opt/ISSM/examples,"{exec_path}":/opt/ISSM/execution \\
-        "{sif_path}" with-issm matlab -nodesktop -nosplash -r "cd('/opt/ISSM/examples'); run('{run_file_name}'); exit"
+        "{sif_path}" with-issm matlab -nodesktop -nosplash -r "cd('/opt/ISSM/examples'); run('{chosen_target}'); exit"
         """
                 return f"""
         # --- ISSM via ICESEE-Container ---
@@ -859,24 +1039,25 @@ python -c "import icepack; print('Icepack import successful')"
         """
 
             # icepack + container
-            if ui_mode_dd.value == "advanced" and run_file_name.endswith(".py"):
+            if chosen_target.endswith(".py"):
                 return f"""
         # --- Icepack via ICESEE-Container ---
         mkdir -p "{example_path}" "{exec_path}"
 
         apptainer exec \\
         -B "{example_path}":/workspace/example,"{exec_path}":/workspace/run \\
-        "{sif_path}" with-icepack bash -lc 'cd /workspace/example && python "{run_file_name}"'
+        "{sif_path}" with-icepack bash -lc 'cd /workspace/example && python "{chosen_target}"'
         """
 
-            if ui_mode_dd.value == "advanced" and run_file_name.endswith(".ipynb"):
+            if chosen_target.endswith(".ipynb"):
+                py_name = Path(chosen_target).with_suffix(".py").name
                 return f"""
         # --- Icepack via ICESEE-Container ---
         mkdir -p "{example_path}" "{exec_path}"
 
         apptainer exec \\
         -B "{example_path}":/workspace/example,"{exec_path}":/workspace/run \\
-        "{sif_path}" with-icepack bash -lc 'cd /workspace/example && if [ ! -f "{py_name}" ]; then jupyter nbconvert --to script "{run_file_name}"; fi && python "{py_name}"'
+        "{sif_path}" with-icepack bash -lc 'cd /workspace/example && jupyter nbconvert --to script "{chosen_target}" && python "{py_name}"'
         """
 
             return f"""
@@ -1009,25 +1190,49 @@ python -c "import icepack; print('Icepack import successful')"
         def build_model_command():
             backend = backend_dd.value
             model = model_dd.value
+            run_file = selected_run_file()
+            run_file_name = Path(run_file).name if run_file else ""
+
+            if model == "issm":
+                default_target = "runme.m"
+            else:
+                default_target = ""
+
+            chosen_target = run_file_name or default_target
 
             if backend == "spack":
                 if model == "issm":
-                    return (
-                        'matlab -nodesktop -nosplash -r '
-                        '"addpath([getenv(\'ISSM_DIR\') \'/bin\'], '
-                        '[getenv(\'ISSM_DIR\') \'/lib\']); '
-                        'issmversion; exit"'
-                    )
+                    if chosen_target.endswith(".m"):
+                        return f'cd "{example_dir.value}" && matlab -nodesktop -nosplash -r "run(\'{chosen_target}\'); exit"'
+                    return f'cd "{example_dir.value}" && matlab -nodesktop -nosplash -r "issmversion; exit"'
+
+                if chosen_target.endswith(".py"):
+                    return f'cd "{example_dir.value}" && python "{chosen_target}"'
+                if chosen_target.endswith(".ipynb"):
+                    py_name = Path(chosen_target).with_suffix(".py").name
+                    return f'cd "{example_dir.value}" && jupyter nbconvert --to script "{chosen_target}" && python "{py_name}"'
                 return f'cd "{example_dir.value}" && python -c "import icepack"'
 
             if model == "issm":
+                if chosen_target.endswith(".m"):
+                    return (
+                        f'mkdir -p "{example_dir.value}" "{exec_dir.value}" && '
+                        f'srun --mpi=pmix -n {slurm_ntasks.value} apptainer exec '
+                        f'-B "{example_dir.value}":/opt/ISSM/examples,"{exec_dir.value}":/opt/ISSM/execution '
+                        f'"{image_uri.value}" with-issm matlab -nodesktop -nosplash -r "run(\'{chosen_target}\'); exit"'
+                    )
                 return (
                     f'mkdir -p "{example_dir.value}" "{exec_dir.value}" && '
                     f'srun --mpi=pmix -n {slurm_ntasks.value} apptainer exec '
                     f'-B "{example_dir.value}":/opt/ISSM/examples,"{exec_dir.value}":/opt/ISSM/execution '
-                    f'"{image_uri.value}" with-issm matlab -r "issmversion"'
+                    f'"{image_uri.value}" with-issm matlab -nodesktop -nosplash -r "issmversion; exit"'
                 )
 
+            if chosen_target.endswith(".py"):
+                return f'apptainer exec "{image_uri.value}" with-icepack python "{chosen_target}"'
+            if chosen_target.endswith(".ipynb"):
+                py_name = Path(chosen_target).with_suffix(".py").name
+                return f'apptainer exec "{image_uri.value}" with-icepack bash -lc \'jupyter nbconvert --to script "{chosen_target}" && python "{py_name}"\''
             return f'apptainer exec "{image_uri.value}" with-icepack python -c "import icepack"'
         
         def list_editable_files(example_path: str) -> list[tuple[str, str]]:
@@ -1070,7 +1275,6 @@ python -c "import icepack; print('Icepack import successful')"
             files = list_editable_files(example_dir.value.strip())
             opts = [Path(v).name for _, v in files if v]
 
-            # prioritize likely run files
             preferred = []
             others = []
 
@@ -1087,7 +1291,19 @@ python -c "import icepack; print('Icepack import successful')"
                 else:
                     others.append(name)
 
-            run_target.options = preferred + others
+            final_opts = preferred + others
+            run_target.options = final_opts
+
+            current = (run_target.value or "").strip()
+            if current and current in final_opts:
+                return
+
+            if "runme.m" in final_opts:
+                run_target.value = "runme.m"
+            elif final_opts:
+                run_target.value = final_opts[0]
+            else:
+                run_target.value = ""
                 
         def auto_set_run_target(_=None):
             current = (run_target.value or "").strip()
@@ -1404,7 +1620,6 @@ python -c "import icepack; print('Icepack import successful')"
             exec_row.layout.display = ""
 
             advanced_action_row.layout.display = "" if is_advanced else "none"
-            advanced_action_row.layout.display = "" if is_advanced else "none"
             file_picker_row.layout.display = "" 
             file_editor_row.layout.display = "" if is_advanced else "none"
             run_target_row.layout.display = "" 
@@ -1672,7 +1887,7 @@ python -c "import icepack; print('Icepack import successful')"
         def on_tail(_=None):
             log_out.clear_output()
 
-            rdir = STATUS.get("remote_dir")
+            rdir = normalize_remote_path(STATUS.get("remote_dir") or "")
             jobid = STATUS.get("jobid")
 
             if not rdir or not jobid:
@@ -1682,6 +1897,7 @@ python -c "import icepack; print('Icepack import successful')"
                 return
 
             log_file = STATUS.get("log_file") or f"{rdir}/icesheets-{jobid}.out"
+            log_file = normalize_remote_path(log_file)
 
             host = cluster_host.value.strip()
             user = cluster_user.value.strip()
@@ -1727,6 +1943,79 @@ fi
                 status_chip.value = status_html("fail")
                 with log_out:
                     print("[remote][ERROR]", type(e).__name__, e)
+
+        
+
+        AUTO_TAIL = {"running": False, "thread": None}
+
+        def auto_tail_loop():
+            while AUTO_TAIL["running"]:
+                try:
+                    rdir = normalize_remote_path(STATUS.get("remote_dir") or "")
+                    jobid = STATUS.get("jobid")
+
+                    if not rdir or not jobid:
+                        with log_out:
+                            print("[auto-tail] No remote_dir / JobID yet. Submit first.")
+                        time.sleep(5)
+                        continue
+
+                    log_file = STATUS.get("log_file") or f"{rdir}/icesheets-{jobid}.out"
+                    log_file = normalize_remote_path(log_file)
+
+                    host = cluster_host.value.strip()
+                    user = cluster_user.value.strip()
+                    port = int(cluster_port.value)
+
+                    tail_cmd = f"""
+        set -e
+        log_file="{log_file}"
+        run_dir="{rdir}"
+
+        if [ -f "$log_file" ]; then
+            echo "[remote] file: $log_file"
+            echo "--- tail ---"
+            tail -n 80 "$log_file"
+        else
+            echo "[remote] log file not found yet: $log_file"
+            echo
+            echo "[remote] contents of run dir:"
+            ls -lah "$run_dir" || true
+        fi
+        """
+
+                    result = ssh_run(host, user, port, tail_cmd, timeout=30)
+
+                    log_out.clear_output(wait=True)
+                    with log_out:
+                        if (result.stdout or "").strip():
+                            print(result.stdout.rstrip())
+                        if (result.stderr or "").strip():
+                            print("--- stderr ---")
+                            print(result.stderr.strip())
+
+                except Exception as e:
+                    with log_out:
+                        print("[auto-tail][ERROR]", type(e).__name__, e)
+
+                time.sleep(5)
+
+
+        def on_auto_tail_click(_=None):
+            if not AUTO_TAIL["running"]:
+                AUTO_TAIL["running"] = True
+                auto_tail_btn.description = "Stop auto tail"
+                auto_tail_btn.icon = "stop"
+                auto_tail_btn.button_style = "warning"
+
+                t = threading.Thread(target=auto_tail_loop, daemon=True)
+                AUTO_TAIL["thread"] = t
+                t.start()
+            else:
+                AUTO_TAIL["running"] = False
+                auto_tail_btn.description = "Start auto tail"
+                auto_tail_btn.icon = "refresh"
+                auto_tail_btn.button_style = "info"
 
         def on_terminate(_=None):
             log_out.clear_output()
@@ -1792,6 +2081,7 @@ fi
         connect_btn.on_click(on_test_remote)
         status_btn.on_click(on_status)
         tail_btn.on_click(on_tail)
+        auto_tail_btn.on_click(on_auto_tail_click)
         terminate_btn.on_click(on_terminate)
         cloud_status_btn.on_click(on_cloud_status)
         cloud_logs_btn.on_click(on_cloud_logs)

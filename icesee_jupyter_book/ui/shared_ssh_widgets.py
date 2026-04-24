@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-
+import os
 import ipywidgets as W
 from icesee_jupyter_book.core.ssh_key_manager import (
     make_ssh_key_info,
@@ -12,9 +12,6 @@ from icesee_jupyter_book.core.ssh_key_manager import (
     test_ssh_login,
     cluster_setup_summary,
 )
-
-from icesee_jupyter_book.core.remote_runner import remote_test_connection
-
 
 def build_ssh_key_manager(cluster_name_widget, host_widget, user_widget):
     output = W.Output(layout=W.Layout(
@@ -162,7 +159,7 @@ def build_ssh_key_manager(cluster_name_widget, host_widget, user_widget):
 
     controls = W.VBox([
         W.HBox([W.HTML("<div class='icesee-lbl'>Alias:</div>"), alias_in], layout=W.Layout(gap="10px")),
-        W.HBox([gen_btn, show_btn, agent_btn, config_btn, test_btn, refresh_btn], layout=W.Layout(gap="10px", flex_wrap="wrap")),
+        W.HBox([gen_btn, show_btn, agent_btn, config_btn, refresh_btn], layout=W.Layout(gap="10px", flex_wrap="wrap")),
         output,
     ], layout=W.Layout(gap="10px"))
 
