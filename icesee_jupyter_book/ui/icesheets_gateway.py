@@ -270,23 +270,26 @@ def build_issm_postprocess_script() -> str:
     return r"""
 disp('[ICESEE-GUI] Running ISSM postprocess...');
 
-run_root = fileparts(pwd);
-figdir = fullfile(run_root, 'outputs', 'figures');
-modeldir = fullfile(run_root, 'outputs', 'model');
+if ~exist('ICESEE_RUN_DIR', 'var') || isempty(ICESEE_RUN_DIR)
+    ICESEE_RUN_DIR = pwd;
+end
+
+figdir   = fullfile(ICESEE_RUN_DIR, 'outputs', 'figures');
+modeldir = fullfile(ICESEE_RUN_DIR, 'outputs', 'model');
 
 if ~exist(figdir, 'dir'); mkdir(figdir); end
 if ~exist(modeldir, 'dir'); mkdir(modeldir); end
 
-try
-    save(fullfile(modeldir, 'md_final.mat'), 'md', '-v7.3');
-    disp('[ICESEE-GUI] Saved model: outputs/model/md_final.mat');
-catch ME
-    disp(['[ICESEE-GUI][WARN] Could not save md_final.mat: ' ME.message]);
-end
-
 if ~exist('md', 'var')
     disp('[ICESEE-GUI][WARN] Variable md does not exist. Nothing to postprocess.');
     return;
+end
+
+try
+    save(fullfile(modeldir, 'md_final.mat'), 'md', '-v7.3');
+    disp(['[ICESEE-GUI] Saved model: ' fullfile(modeldir, 'md_final.mat')]);
+catch ME
+    disp(['[ICESEE-GUI][WARN] Could not save md_final.mat: ' ME.message]);
 end
 
 try
@@ -302,9 +305,6 @@ if isempty(results)
 end
 
 try
-    % ------------------------------------------------------------
-    % Stressbalance examples
-    % ------------------------------------------------------------
     if isfield(results, 'StressbalanceSolution')
         sol = results.StressbalanceSolution;
 
@@ -314,7 +314,7 @@ try
             title('Stressbalance velocity');
             saveas(f, fullfile(figdir, 'stressbalance_velocity.png'));
             close(f);
-            disp('[ICESEE-GUI] Saved outputs/figures/stressbalance_velocity.png');
+            disp('[ICESEE-GUI] Saved stressbalance_velocity.png');
         end
 
         if isfield(sol, 'Pressure')
@@ -323,76 +323,63 @@ try
             title('Stressbalance pressure');
             saveas(f, fullfile(figdir, 'stressbalance_pressure.png'));
             close(f);
-            disp('[ICESEE-GUI] Saved outputs/figures/stressbalance_pressure.png');
+            disp('[ICESEE-GUI] Saved stressbalance_pressure.png');
         end
 
         return;
     end
 
-    % ------------------------------------------------------------
-    % Transient examples
-    % ------------------------------------------------------------
     if isfield(results, 'TransientSolution')
         sol = results.TransientSolution;
-        n = numel(sol);
+        last = sol(numel(sol));
 
-        if n > 0
-            last = sol(n);
+        if isfield(last, 'Vel')
+            f = figure('Visible', 'off');
+            plotmodel(md, 'data', last.Vel);
+            title('Final transient velocity');
+            saveas(f, fullfile(figdir, 'transient_final_velocity.png'));
+            close(f);
+            disp('[ICESEE-GUI] Saved transient_final_velocity.png');
+        end
 
-            if isfield(last, 'Vel')
-                f = figure('Visible', 'off');
-                plotmodel(md, 'data', last.Vel);
-                title('Final transient velocity');
-                saveas(f, fullfile(figdir, 'transient_final_velocity.png'));
-                close(f);
-                disp('[ICESEE-GUI] Saved outputs/figures/transient_final_velocity.png');
-            end
+        if isfield(last, 'Thickness')
+            f = figure('Visible', 'off');
+            plotmodel(md, 'data', last.Thickness);
+            title('Final transient thickness');
+            saveas(f, fullfile(figdir, 'transient_final_thickness.png'));
+            close(f);
+            disp('[ICESEE-GUI] Saved transient_final_thickness.png');
+        end
 
-            if isfield(last, 'Thickness')
-                f = figure('Visible', 'off');
-                plotmodel(md, 'data', last.Thickness);
-                title('Final transient thickness');
-                saveas(f, fullfile(figdir, 'transient_final_thickness.png'));
-                close(f);
-                disp('[ICESEE-GUI] Saved outputs/figures/transient_final_thickness.png');
-            end
-
-            if isfield(last, 'Surface')
-                f = figure('Visible', 'off');
-                plotmodel(md, 'data', last.Surface);
-                title('Final transient surface');
-                saveas(f, fullfile(figdir, 'transient_final_surface.png'));
-                close(f);
-                disp('[ICESEE-GUI] Saved outputs/figures/transient_final_surface.png');
-            end
+        if isfield(last, 'Surface')
+            f = figure('Visible', 'off');
+            plotmodel(md, 'data', last.Surface);
+            title('Final transient surface');
+            saveas(f, fullfile(figdir, 'transient_final_surface.png'));
+            close(f);
+            disp('[ICESEE-GUI] Saved transient_final_surface.png');
         end
 
         return;
     end
 
-    % ------------------------------------------------------------
-    % Thermal examples
-    % ------------------------------------------------------------
-    if isfield(md.results, 'ThermalSolution')
-        sol = md.results.ThermalSolution;
+    if isfield(results, 'ThermalSolution')
+        sol = results.ThermalSolution;
 
         if isfield(sol, 'Temperature')
             f = figure('Visible', 'off');
             plotmodel(md, 'data', sol.Temperature);
-            title('Thermal solution temperature');
+            title('Thermal temperature');
             saveas(f, fullfile(figdir, 'thermal_temperature.png'));
             close(f);
-            disp('[ICESEE-GUI] Saved outputs/figures/thermal_temperature.png');
+            disp('[ICESEE-GUI] Saved thermal_temperature.png');
         end
 
         return;
     end
 
-    % ------------------------------------------------------------
-    % Masstransport examples
-    % ------------------------------------------------------------
-    if isfield(md.results, 'MasstransportSolution')
-        sol = md.results.MasstransportSolution;
+    if isfield(results, 'MasstransportSolution')
+        sol = results.MasstransportSolution;
 
         if isfield(sol, 'Thickness')
             f = figure('Visible', 'off');
@@ -400,14 +387,13 @@ try
             title('Mass transport thickness');
             saveas(f, fullfile(figdir, 'masstransport_thickness.png'));
             close(f);
-            disp('[ICESEE-GUI] Saved outputs/figures/masstransport_thickness.png');
+            disp('[ICESEE-GUI] Saved masstransport_thickness.png');
         end
 
         return;
     end
 
-    disp('[ICESEE-GUI][WARN] Solver type not recognized in md.results.');
-    disp('[ICESEE-GUI][INFO] Available result fields:');
+    disp('[ICESEE-GUI][WARN] Solver type not recognized.');
     disp(fieldnames(md.results));
 
 catch ME
@@ -543,7 +529,7 @@ def submit_remote_icesheets(
     rm -rf "{remote_run_dir}"
     mkdir -p "{remote_run_dir}"
     '''
-    mkres = ssh_run(host, user, port, clean_cmd, timeout=30)
+    mkres = ssh_run(host, user, port, clean_cmd, timeout=300)
 
     # ---------------------------------------------------------
     # Stage local example to remote run dir
@@ -552,7 +538,7 @@ def submit_remote_icesheets(
     if not local_example_path.exists():
         raise RuntimeError(f"Local example path does not exist: {local_example_path}")
 
-    mkres = ssh_run(host, user, port, f'mkdir -p "{remote_run_dir}"', timeout=30)
+    mkres = ssh_run(host, user, port, f'mkdir -p "{remote_run_dir}"', timeout=300)
     if mkres.returncode != 0:
         raise RuntimeError(f"Failed to create remote run dir:\n{mkres.stderr}")
 
@@ -634,7 +620,7 @@ python -c "import icepack; print('Icepack import successful')"
                 target_m = run_file_name if run_file_name.endswith(".m") else "runme.m"
                 run_block = f'''
 cd "{remote_example_dir}"
-matlab -nodesktop -nosplash -r "{issm_matlab_setup} run('{target_m}'); run('../postprocess_icesee.m'); exit"
+matlab -nodesktop -nosplash -r "{issm_matlab_setup} ICESEE_RUN_DIR='{remote_run_dir}'; run('{target_m}'); run('../postprocess_icesee.m'); exit"
 '''
             elif model == "icepack":
                 if run_file_name.endswith(".py"):
@@ -829,7 +815,7 @@ echo "[icesheets] Run dir: {remote_run_dir}"
         f'(echo MISSING && ls -lah {remote_run_dir_q} && exit 1)'
     )
 
-    vres = ssh_run(host, user, port, verify_cmd, timeout=30)
+    vres = ssh_run(host, user, port, verify_cmd, timeout=60)
     if vres.returncode != 0:
         raise RuntimeError(
             "Remote submit script was not found after write step\n"
@@ -1722,26 +1708,43 @@ def build_icesheets_ui():
             return root / "_icesee_remote_runs" / f"{model_dd.value}_{backend_dd.value}"
         
         def auto_download_file(path: Path, filename: str | None = None):
+            import time
+            import uuid
+            import base64
+            import html
+            from IPython.display import HTML, display
+
             path = Path(path).resolve()
+            stamp = time.strftime("%Y%m%d_%H%M%S")
             filename = filename or path.name
 
+            stem = Path(filename).stem
+            suffix = Path(filename).suffix or ".zip"
+            download_name = f"{stem}_{stamp}{suffix}"
+
             data = base64.b64encode(path.read_bytes()).decode("ascii")
+            elem_id = f"icesee_download_{uuid.uuid4().hex}"
 
             display(HTML(f"""
+            <div id="{elem_id}"></div>
             <script>
-            const a = document.createElement("a");
-            a.href = "data:application/zip;base64,{data}";
-            a.download = "{filename}";
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+            (function() {{
+                const a = document.createElement("a");
+                a.href = "data:application/zip;base64,{data}";
+                a.download = "{html.escape(download_name)}";
+                a.style.display = "none";
+                document.body.appendChild(a);
+                setTimeout(() => {{
+                    a.click();
+                    document.body.removeChild(a);
+                }}, 100);
+            }})();
             </script>
             """))
 
         def remote_outputs_dir() -> str:
             rdir = normalize_remote_path(STATUS.get("remote_dir") or "")
-            # rdir = .../icesheets/runs/issm_spack
-            return str(Path(rdir).parent / "outputs")
+            return f"{rdir}/outputs"
 
         def fetch_remote_outputs_to_local() -> Path | None:
             rdir = normalize_remote_path(STATUS.get("remote_dir") or "")
@@ -1809,6 +1812,7 @@ def build_icesheets_ui():
 
                 with results_out:
                     print(f"Preparing download: {zip_path.name}")
+                    print("If the browser blocks repeated downloads, allow multiple downloads for this page.")
                     auto_download_file(zip_path, "results_bundle.zip")
 
             except Exception as e:
@@ -1850,7 +1854,8 @@ def build_icesheets_ui():
                     raise RuntimeError(f"Created file is not a valid zip: {zip_path}")
 
                 with results_out:
-                    print(f"Created valid figures bundle: {zip_path}")
+                    print(f"Preparing download: {zip_path.name}")
+                    print("If the browser blocks repeated downloads, allow multiple downloads for this page.")
                     auto_download_file(zip_path, "figures_bundle.zip")
 
             except Exception as e:
@@ -1859,19 +1864,24 @@ def build_icesheets_ui():
 
         def inspect_remote_outputs():
             rdir = normalize_remote_path(STATUS.get("remote_dir") or "")
+            outputs = f"{rdir}/outputs"
+
             host = cluster_host.value.strip()
             user = cluster_user.value.strip()
             port = int(cluster_port.value)
 
             cmd = f'''
         set -e
-        echo "[remote] run dir: {rdir}"
+        echo "[remote] run dir : {rdir}"
+        echo "[remote] outputs : {outputs}"
         echo
-        echo "[remote] output-like folders:"
-        find "{rdir}" -maxdepth 5 -type d \\( -name outputs -o -name output -o -name figures -o -name results -o -name model \\) -print || true
+
+        echo "[remote] output tree:"
+        find "{outputs}" -maxdepth 5 -print || true
+
         echo
-        echo "[remote] png/mat files:"
-        find "{rdir}" -maxdepth 6 -type f \\( -name "*.png" -o -name "*.mat" -o -name "*.h5" \\) -print || true
+        echo "[remote] png/mat/h5 files:"
+        find "{outputs}" -maxdepth 6 -type f \\( -name "*.png" -o -name "*.mat" -o -name "*.h5" \\) -print || true
         '''
             return ssh_run(host, user, port, cmd, timeout=30)
 
