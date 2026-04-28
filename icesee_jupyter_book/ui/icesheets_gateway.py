@@ -10,6 +10,9 @@ import subprocess
 from pathlib import Path
 from IPython.display import FileLink
 
+from IPython.display import HTML
+import base64
+
 import ipywidgets as W
 from IPython.display import display, Image
 
@@ -263,6 +266,155 @@ def normalize_remote_path(path: str) -> str:
         path = path.replace("//", "/")
     return path
 
+def build_issm_postprocess_script() -> str:
+    return r"""
+disp('[ICESEE-GUI] Running ISSM postprocess...');
+
+run_root = fileparts(pwd);
+figdir = fullfile(run_root, 'outputs', 'figures');
+modeldir = fullfile(run_root, 'outputs', 'model');
+
+if ~exist(figdir, 'dir'); mkdir(figdir); end
+if ~exist(modeldir, 'dir'); mkdir(modeldir); end
+
+try
+    save(fullfile(modeldir, 'md_final.mat'), 'md', '-v7.3');
+    disp('[ICESEE-GUI] Saved model: outputs/model/md_final.mat');
+catch ME
+    disp(['[ICESEE-GUI][WARN] Could not save md_final.mat: ' ME.message]);
+end
+
+if ~exist('md', 'var')
+    disp('[ICESEE-GUI][WARN] Variable md does not exist. Nothing to postprocess.');
+    return;
+end
+
+try
+    results = md.results;
+catch ME
+    disp(['[ICESEE-GUI][WARN] Could not access md.results: ' ME.message]);
+    return;
+end
+
+if isempty(results)
+    disp('[ICESEE-GUI][WARN] md.results is empty. Nothing to plot.');
+    return;
+end
+
+try
+    % ------------------------------------------------------------
+    % Stressbalance examples
+    % ------------------------------------------------------------
+    if isfield(results, 'StressbalanceSolution')
+        sol = results.StressbalanceSolution;
+
+        if isfield(sol, 'Vel')
+            f = figure('Visible', 'off');
+            plotmodel(md, 'data', sol.Vel);
+            title('Stressbalance velocity');
+            saveas(f, fullfile(figdir, 'stressbalance_velocity.png'));
+            close(f);
+            disp('[ICESEE-GUI] Saved outputs/figures/stressbalance_velocity.png');
+        end
+
+        if isfield(sol, 'Pressure')
+            f = figure('Visible', 'off');
+            plotmodel(md, 'data', sol.Pressure);
+            title('Stressbalance pressure');
+            saveas(f, fullfile(figdir, 'stressbalance_pressure.png'));
+            close(f);
+            disp('[ICESEE-GUI] Saved outputs/figures/stressbalance_pressure.png');
+        end
+
+        return;
+    end
+
+    % ------------------------------------------------------------
+    % Transient examples
+    % ------------------------------------------------------------
+    if isfield(results, 'TransientSolution')
+        sol = results.TransientSolution;
+        n = numel(sol);
+
+        if n > 0
+            last = sol(n);
+
+            if isfield(last, 'Vel')
+                f = figure('Visible', 'off');
+                plotmodel(md, 'data', last.Vel);
+                title('Final transient velocity');
+                saveas(f, fullfile(figdir, 'transient_final_velocity.png'));
+                close(f);
+                disp('[ICESEE-GUI] Saved outputs/figures/transient_final_velocity.png');
+            end
+
+            if isfield(last, 'Thickness')
+                f = figure('Visible', 'off');
+                plotmodel(md, 'data', last.Thickness);
+                title('Final transient thickness');
+                saveas(f, fullfile(figdir, 'transient_final_thickness.png'));
+                close(f);
+                disp('[ICESEE-GUI] Saved outputs/figures/transient_final_thickness.png');
+            end
+
+            if isfield(last, 'Surface')
+                f = figure('Visible', 'off');
+                plotmodel(md, 'data', last.Surface);
+                title('Final transient surface');
+                saveas(f, fullfile(figdir, 'transient_final_surface.png'));
+                close(f);
+                disp('[ICESEE-GUI] Saved outputs/figures/transient_final_surface.png');
+            end
+        end
+
+        return;
+    end
+
+    % ------------------------------------------------------------
+    % Thermal examples
+    % ------------------------------------------------------------
+    if isfield(md.results, 'ThermalSolution')
+        sol = md.results.ThermalSolution;
+
+        if isfield(sol, 'Temperature')
+            f = figure('Visible', 'off');
+            plotmodel(md, 'data', sol.Temperature);
+            title('Thermal solution temperature');
+            saveas(f, fullfile(figdir, 'thermal_temperature.png'));
+            close(f);
+            disp('[ICESEE-GUI] Saved outputs/figures/thermal_temperature.png');
+        end
+
+        return;
+    end
+
+    % ------------------------------------------------------------
+    % Masstransport examples
+    % ------------------------------------------------------------
+    if isfield(md.results, 'MasstransportSolution')
+        sol = md.results.MasstransportSolution;
+
+        if isfield(sol, 'Thickness')
+            f = figure('Visible', 'off');
+            plotmodel(md, 'data', sol.Thickness);
+            title('Mass transport thickness');
+            saveas(f, fullfile(figdir, 'masstransport_thickness.png'));
+            close(f);
+            disp('[ICESEE-GUI] Saved outputs/figures/masstransport_thickness.png');
+        end
+
+        return;
+    end
+
+    disp('[ICESEE-GUI][WARN] Solver type not recognized in md.results.');
+    disp('[ICESEE-GUI][INFO] Available result fields:');
+    disp(fieldnames(md.results));
+
+catch ME
+    disp(['[ICESEE-GUI][ERROR] Postprocess failed: ' ME.message]);
+end
+"""
+
 def submit_remote_icesheets(
     *,
     host: str,
@@ -428,6 +580,34 @@ def submit_remote_icesheets(
     messages.append(f"[remote] staged example dir: {remote_example_dir}")
     messages.append(f"[remote] staged exec dir   : {remote_exec_dir}")
 
+    if model == "issm":
+        import base64
+        import shlex
+
+        postprocess_path = f"{remote_run_dir}/postprocess_icesee.m"
+        postprocess_text = build_issm_postprocess_script()
+        encoded_post = base64.b64encode(postprocess_text.encode("utf-8")).decode("ascii")
+
+        write_post_cmd = (
+            "python3 -c "
+            + shlex.quote(
+                "import base64, pathlib; "
+                f"p = pathlib.Path({postprocess_path!r}); "
+                "p.parent.mkdir(parents=True, exist_ok=True); "
+                f"p.write_text(base64.b64decode({encoded_post!r}).decode('utf-8'), encoding='utf-8'); "
+                "print(str(p))"
+            )
+        )
+
+        pres = ssh_run(host, user, port, write_post_cmd, timeout=60)
+        if pres.returncode != 0:
+            raise RuntimeError(
+                "Failed to write ISSM postprocess script\n"
+                f"STDOUT:\n{pres.stdout}\n\nSTDERR:\n{pres.stderr}"
+            )
+
+        messages.append(f"[remote] wrote postprocess script: {postprocess_path}")
+
     # ---------------------------------------------------------
     # Build model-specific run block
     # ---------------------------------------------------------
@@ -454,7 +634,7 @@ python -c "import icepack; print('Icepack import successful')"
                 target_m = run_file_name if run_file_name.endswith(".m") else "runme.m"
                 run_block = f'''
 cd "{remote_example_dir}"
-matlab -nodesktop -nosplash -r "{issm_matlab_setup} run('{target_m}'); exit"
+matlab -nodesktop -nosplash -r "{issm_matlab_setup} run('{target_m}'); run('../postprocess_icesee.m'); exit"
 '''
             elif model == "icepack":
                 if run_file_name.endswith(".py"):
@@ -600,6 +780,7 @@ apptainer exec "{sif_path}" with-icepack python -c "import icepack; print('Icepa
 set -euo pipefail
 
 cd "{remote_run_dir}"
+mkdir -p outputs/model outputs/figures # create expected output dirs
 
 echo "[icesheets] Host: $(hostname)"
 echo "[icesheets] Date: $(date)"
@@ -877,6 +1058,12 @@ def build_icesheets_ui():
             description="Enable passwordless SSH",
             icon="key",
             button_style="warning",
+        )
+
+        preview_results_btn = W.Button(
+            description="Preview results",
+            icon="eye",
+            button_style="info",
         )
 
         slurm_job_name = W.Text(value="ICESHEETS", layout=W.Layout(width="100%"))
@@ -1530,33 +1717,100 @@ def build_icesheets_ui():
                     if p.is_file():
                         zf.write(p, arcname=p.relative_to(src_dir))
 
+        def local_run_cache_dir() -> Path:
+            root = current_example_root()
+            return root / "_icesee_remote_runs" / f"{model_dd.value}_{backend_dd.value}"
+        
+        def auto_download_file(path: Path, filename: str | None = None):
+            path = Path(path).resolve()
+            filename = filename or path.name
+
+            data = base64.b64encode(path.read_bytes()).decode("ascii")
+
+            display(HTML(f"""
+            <script>
+            const a = document.createElement("a");
+            a.href = "data:application/zip;base64,{data}";
+            a.download = "{filename}";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            </script>
+            """))
+
+        def remote_outputs_dir() -> str:
+            rdir = normalize_remote_path(STATUS.get("remote_dir") or "")
+            # rdir = .../icesheets/runs/issm_spack
+            return str(Path(rdir).parent / "outputs")
+
+        def fetch_remote_outputs_to_local() -> Path | None:
+            rdir = normalize_remote_path(STATUS.get("remote_dir") or "")
+            if not rdir:
+                with results_out:
+                    print("[results] No remote run directory found. Submit a job first.")
+                return None
+
+            host = cluster_host.value.strip()
+            user = cluster_user.value.strip()
+            port = int(cluster_port.value)
+
+            local_cache = local_run_cache_dir()
+            outputs_dir = local_cache / "outputs"
+
+            if outputs_dir.exists():
+                shutil.rmtree(outputs_dir)
+            outputs_dir.mkdir(parents=True, exist_ok=True)
+
+            # Fetch everything useful, not only rdir/outputs
+            # remote_source = f"{rdir.rstrip('/')}/"
+            remote_outputs = remote_outputs_dir()
+
+            rsync_cmd = [
+                "rsync",
+                "-az",
+                "-e",
+                f"ssh -p {port}",
+                f"{user}@{host}:{remote_outputs.rstrip('/')}/",
+                f"{outputs_dir}/",
+            ]
+
+            rs = subprocess.run(rsync_cmd, capture_output=True, text=True)
+
+            if rs.returncode != 0:
+                with results_out:
+                    print("[results][ERROR] Could not fetch remote outputs.")
+                    print("Remote source:", remote_outputs)
+                    print("--- stdout ---")
+                    print(rs.stdout)
+                    print("--- stderr ---")
+                    print(rs.stderr)
+                return None
+
+            return outputs_dir
+
         def download_results_bundle(_=None):
             results_out.clear_output()
 
-            root = current_example_root()
-            if root is None:
-                with results_out:
-                    print("[download][ERROR] Example directory is not available.")
+            outputs_dir = fetch_remote_outputs_to_local()
+            if outputs_dir is None:
                 return
 
-            candidates = [
-                root / "results",
-                root / "_modelrun_datasets",
-                root / "output",
-            ]
-            src = next((p for p in candidates if p.exists() and p.is_dir()), None)
+            zip_path = local_run_cache_dir() / "results_bundle.zip"
 
-            if src is None:
-                with results_out:
-                    print("[download] No results directory found.")
-                return
-
-            zip_path = root / "results_bundle.zip"
             try:
-                make_zip_from_dir(src, zip_path)
+                if zip_path.exists():
+                    zip_path.unlink()
+
+                make_zip_from_dir(outputs_dir, zip_path)
+
+                # sanity check
+                if not zipfile.is_zipfile(zip_path):
+                    raise RuntimeError(f"Created file is not a valid zip: {zip_path}")
+
                 with results_out:
-                    print(f"Created: {zip_path}")
-                    display(FileLink(str(zip_path), result_html_prefix="Download: "))
+                    print(f"Preparing download: {zip_path.name}")
+                    auto_download_file(zip_path, "results_bundle.zip")
+
             except Exception as e:
                 with results_out:
                     print("[download][ERROR]", type(e).__name__, e)
@@ -1564,33 +1818,108 @@ def build_icesheets_ui():
         def download_figures_bundle(_=None):
             results_out.clear_output()
 
-            root = current_example_root()
-            if root is None:
-                with results_out:
-                    print("[download][ERROR] Example directory is not available.")
+            outputs_dir = fetch_remote_outputs_to_local()
+            if outputs_dir is None:
                 return
 
-            candidates = [
-                root / "figures",
-                root / "results" / "figures",
-            ]
-            src = next((p for p in candidates if p.exists() and p.is_dir()), None)
-
-            if src is None:
+            pngs = sorted(outputs_dir.rglob("*.png"))
+            if not pngs:
                 with results_out:
-                    print("[download] No figures directory found.")
+                    print("[download] No PNG figures found.")
+                    print("Checked recursively under:", outputs_dir)
                 return
 
-            zip_path = root / "figures_bundle.zip"
+            fig_tmp = local_run_cache_dir() / "_figures_only"
+            if fig_tmp.exists():
+                shutil.rmtree(fig_tmp)
+            fig_tmp.mkdir(parents=True, exist_ok=True)
+
+            for p in pngs:
+                shutil.copy2(p, fig_tmp / p.name)
+
+            zip_path = local_run_cache_dir() / "figures_bundle.zip"
+
             try:
-                make_zip_from_dir(src, zip_path)
+                if zip_path.exists():
+                    zip_path.unlink()
+
+                make_zip_from_dir(fig_tmp, zip_path)
+
+                # sanity check
+                if not zipfile.is_zipfile(zip_path):
+                    raise RuntimeError(f"Created file is not a valid zip: {zip_path}")
+
                 with results_out:
-                    print(f"Created: {zip_path}")
-                    display(FileLink(str(zip_path), result_html_prefix="Download: "))
+                    print(f"Created valid figures bundle: {zip_path}")
+                    auto_download_file(zip_path, "figures_bundle.zip")
+
             except Exception as e:
                 with results_out:
                     print("[download][ERROR]", type(e).__name__, e)
 
+        def inspect_remote_outputs():
+            rdir = normalize_remote_path(STATUS.get("remote_dir") or "")
+            host = cluster_host.value.strip()
+            user = cluster_user.value.strip()
+            port = int(cluster_port.value)
+
+            cmd = f'''
+        set -e
+        echo "[remote] run dir: {rdir}"
+        echo
+        echo "[remote] output-like folders:"
+        find "{rdir}" -maxdepth 5 -type d \\( -name outputs -o -name output -o -name figures -o -name results -o -name model \\) -print || true
+        echo
+        echo "[remote] png/mat files:"
+        find "{rdir}" -maxdepth 6 -type f \\( -name "*.png" -o -name "*.mat" -o -name "*.h5" \\) -print || true
+        '''
+            return ssh_run(host, user, port, cmd, timeout=30)
+
+        def preview_remote_results(_=None):
+            results_out.clear_output()
+
+            rcheck = inspect_remote_outputs()
+
+            outputs_dir = fetch_remote_outputs_to_local()
+            if outputs_dir is None:
+                return
+
+            pngs = sorted(outputs_dir.rglob("*.png"))
+            mats = sorted(outputs_dir.rglob("*.mat"))
+            h5s = sorted(outputs_dir.rglob("*.h5"))
+            all_files = sorted([p for p in outputs_dir.rglob("*") if p.is_file()])
+
+            with results_out:
+                print("Fetched outputs:", outputs_dir)
+                print(f"Figures: {len(pngs)}")
+                print(f"Model files: {len(mats)}")
+                print(f"H5 files: {len(h5s)}\n")
+
+                if all_files:
+                    print("Output tree:")
+                    for p in all_files[:40]:
+                        print(" -", p.relative_to(outputs_dir))
+                    print()
+
+                if pngs:
+                    print("Found figures at:")
+                    for p in pngs[:10]:
+                        print(" -", p)
+
+                if pngs:
+                    print("Preview figures:")
+                    for p in pngs:
+                        print("\n", p.name)
+                        display(Image(filename=str(p)))
+                else:
+                    print("No PNG figures found locally after fetch.\n")
+                    print("--- Remote inspection ---")
+                    print((rcheck.stdout or "").strip())
+                    if (rcheck.stderr or "").strip():
+                        print("--- stderr ---")
+                        print(rcheck.stderr.strip())
+                
+        
         def maybe_seed_run_target_from_file(_=None):
             current = (run_target.value or "").strip()
             selected_file = file_picker.value or ""
@@ -1598,6 +1927,24 @@ def build_icesheets_ui():
                 return
 
             run_target.value = Path(selected_file).name
+
+        def display_download_button(path: Path, label: str):
+            href = path.as_posix()
+            display(W.HTML(f"""
+            <a href="files/{href}" download
+            style="
+                display:inline-block;
+                background:#28a745;
+                color:white;
+                padding:8px 14px;
+                border-radius:6px;
+                text-decoration:none;
+                font-weight:700;
+                margin-top:8px;">
+            ⬇ {label}
+            </a>
+            """))
+
 
         # =========================================================
         # Dynamic logic
@@ -2060,6 +2407,7 @@ fi
         upload_dataset_btn.on_click(save_uploaded_datasets)
         results_download_btn.on_click(download_results_bundle)
         figures_download_btn.on_click(download_figures_bundle)
+        preview_results_btn.on_click(preview_remote_results)
 
         # =========================================================
         # CSS
@@ -2163,8 +2511,9 @@ fi
             layout=W.Layout(gap="10px", flex_wrap="wrap"),
         )
 
+        # [preview_results_btn, results_download_btn, figures_download_btn],
         download_buttons_row = W.HBox(
-            [results_download_btn, figures_download_btn],
+            [preview_results_btn, results_download_btn],
             layout=W.Layout(
                 gap="10px",
                 justify_content="flex-end",
